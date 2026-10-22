@@ -43,9 +43,8 @@ or use its VS Code extension. The toolchain and M5 libraries are pinned in
 `platformio.ini`.
 
 ```sh
-cp include/secrets.example.h include/secrets.h
-# Edit secrets.h: Wi-Fi name/password and a NEW control password (16–96 characters).
 pio run
+# Configure Wi-Fi and the API key through CONFIG.INI after flashing.
 ```
 
 The local environment created during development can also be used:
@@ -68,9 +67,62 @@ in download mode. The application presents mass storage only, so the serial
 upload port disappears during normal use. Re-enter download mode to flash again.
 The side reset/power button is **not** the mode toggle; use the front A button.
 
-Without `secrets.h`, the firmware builds with Wi-Fi disabled and the button still
-works. Credentials are compiled into the firmware: keep both `secrets.h` and any
-credential-bearing binaries private. No provisioning access point or OTA is used.
+Firmware builds contain no credentials and do not read a secrets header. On
+first boot, Wi-Fi credentials and the API key are empty, so **Wi-Fi and HTTP/API
+are disabled**. Configure them through `CONFIG.INI`; validated edits are retained
+in NVS and restored into the file at startup. Existing USB-saved settings survive
+firmware updates. No credentials or API keys are generated automatically.
+
+## Edit settings over USB
+
+Open **CONFIG.INI** on the **BOOTSWITCH** USB drive in a plain text editor:
+
+```ini
+wifi_ssid=
+wifi_password=
+api_key=
+hostname=bootswitch
+```
+
+Save and close the file, then **safely eject** the USB drive. The StickS3 validates
+the complete file, saves all four settings together, and restarts to apply them.
+Its selected OS is retained. The disk reappears with the saved settings. Ordinary
+saves and editors that replace files using a temporary file/rename are supported.
+On Linux, use **Eject**, rather than just Unmount or Power Off; for example:
+
+```sh
+gio mount --eject "/run/media/$USER/BOOTSWITCH"
+```
+
+If your tool cannot eject the device, flush and unmount the volume first, then
+hold the **side B user button** for 1.5 seconds to apply. This is separate from the
+reset/power button. Do not restart or unplug before applying: unsaved session
+changes are discarded. If validation fails, the display shows an error and the
+previous network settings keep working. Briefly press reset to restore the last
+saved CONFIG.INI, then edit it again.
+
+- Fields may be omitted, but may not appear more than once. Missing Wi-Fi fields
+  and API key default to empty; the default hostname is `bootswitch`. Emptying
+  CONFIG.INI disables both services. A missing/deleted file is still an error.
+- A blank or omitted `wifi_ssid` keeps Wi-Fi off. A blank or omitted `api_key`
+  keeps the HTTP server and all web/API endpoints off, even when Wi-Fi connects.
+  An empty key never permits anonymous access. To enable both, enter your Wi-Fi
+  network and a key; `api_key` is also the web password for username `admin`.
+- Values are literal text after `=`: do not add quotes or spaces around `=`.
+  Spaces and `#` within a Wi-Fi value are preserved. Lines beginning with `#` or
+  `;` are comments. LF, CRLF, and a UTF-8 BOM are accepted.
+- SSID: at most 32 UTF-8 bytes. Wi-Fi password: empty for an open network, 8–63
+  bytes for a passphrase, or exactly 64 hex digits for a raw WPA key. The password
+  is unused while the SSID is empty. Button/USB selection works with Wi-Fi off.
+- API key: empty to disable HTTP/API, otherwise 16–96 printable ASCII characters
+  without whitespace. Hostname: 1–63 lowercase letters, digits and hyphens,
+  without a leading or trailing hyphen.
+- CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its boot
+  files. Other files and editor backups exist only in RAM and disappear on restart.
+
+Anyone who can access this USB disk can read and change its Wi-Fi password and
+API key. The configuration file intentionally contains those values in plaintext.
+Changing the key invalidates the previous web/API password after the restart.
 
 ## Button and Wi-Fi control
 
@@ -79,7 +131,7 @@ is saved to NVS before it appears on USB or the display. A save error is shown
 instead of acknowledging an unsaved change.
 
 Visit `http://bootswitch.local/` or the IP shown on screen. Sign in as **admin**
-using your control password. The page offers Linux, Windows, and Toggle controls.
+using the `api_key` from CONFIG.INI. The page offers Linux, Windows, and Toggle controls.
 It polls the device so button changes appear too. If mDNS is unavailable, use
 the displayed IP or reserve a DHCP address.
 
@@ -203,19 +255,27 @@ To undo, remove `/etc/grub.d/01_bootswitch` and regenerate the configuration.
 
 ## USB behavior and timing
 
-The device generates a read-only 16 MiB disk with an MBR and a valid FAT16
-partition, label `BOOTSWITCH`, UUID `B007-5E1E`. Only two small files exist:
+The device generates a **writable 4 MiB RAM disk** with an MBR and a valid FAT16
+partition, label `BOOTSWITCH`, UUID `B007-5E1E`. The label and UUID are unchanged
+from the original version, so the existing EFI bridge and GRUB snippet work
+without changes. The disk uses 4 MiB of the StickS3's 8 MiB PSRAM and contains:
 
 - `MODE.TXT`: `linux` or `windows`, padded to eight bytes including newline.
 - `SWITCH.CFG`: `set bootswitch_mode=linux` or `…=windows`, with fixed file size.
+- `CONFIG.INI`: editable Wi-Fi, API key, and hostname settings.
 
-All block writes are rejected and USB advertises write protection. There is no
-shared writable flash filesystem. The mode is sampled once per USB read callback.
-Metadata and file sizes never change. Both boot integrations read the selection
-once during boot: set it **before powering on/restarting**. Changes made later
-apply on a subsequent boot. Host firmware can cache reads; last-millisecond
-changes are not guaranteed. A mounted OS may show stale file contents; use the
-Wi-Fi API for live status. Never format the device.
+The two boot files have read-only attributes; their payloads are generated from
+the selected mode on reads. Host writes go to a RAM image, which supports normal
+FAT allocation and editor saves. Only a valid configuration is committed to NVS
+after eject/apply. Filesystem damage, missing config, malformed settings and failed
+NVS saves cannot replace the last working configuration. If PSRAM allocation
+fails, USB falls back to the two-file read-only selector and the display reports
+that the config disk is unavailable.
+
+Both boot integrations read the selection once during boot: set it **before
+powering on/restarting**. Changes made later apply on a subsequent boot. Host
+firmware can cache reads; last-millisecond changes are not guaranteed. A mounted
+OS may show stale boot-file contents; use the Wi-Fi API for live status.
 
 ## Verification
 
@@ -226,8 +286,10 @@ make test
 python3 tests/check_efi.py
 ```
 
-The native checks exercise full/partial/cross-sector reads and bounds under
-AddressSanitizer/UBSan. `fsck.fat` and `mtype` independently validate both generated
+The native checks exercise full/partial/cross-sector reads and writes, settings
+validation, corrupt FAT chains, and bounds under AddressSanitizer/UBSan. Real FAT
+tools also test overwriting CONFIG.INI and replacing it via a temporary file and
+rename, including a multi-cluster configuration. `fsck.fat` and `mtype` independently validate both generated
 filesystems. If running under a ptrace-based sandbox, use
 `ASAN_OPTIONS=detect_leaks=0 make test` (LeakSanitizer cannot run under ptrace).
 
@@ -258,6 +320,15 @@ The original Windows selection was restored after those tests. The EFI bridge
 was then installed and successfully tested on the physical PC with systemd-boot
 258.1, using Arch Linux for the Linux position and Memtest for the Windows
 position. Actual Windows booting was not part of that hardware test.
+The writable-disk firmware was also tested on the same StickS3: editor-style
+replacement of CONFIG.INI, safe-eject/restart, API-key and hostname changes, old-key
+rejection, Wi-Fi disablement, and provisioning the original network again entirely
+through USB all passed. The original credentials were restored and the selected
+boot mode was retained throughout.
+Configuration-only defaults were verified on hardware as well: clearing the API
+key left Wi-Fi connected (ping worked) with no HTTP listener; clearing the SSID
+disabled Wi-Fi; and an empty CONFIG.INI survived restart with blank credentials
+and key, leaving both services off. Original working settings were restored.
 The full original firmware backup and verification record are in the ignored `build/backups/` directory;
 keep the backup private because it may contain previous firmware settings.
 
@@ -269,8 +340,23 @@ the following with the IP shown on the StickS3 and your actual mount path:
   --usb-mode-file "/run/media/$USER/BOOTSWITCH/MODE.TXT"
 ```
 
-This uses the local `secrets.h`, temporarily changes the mode, and restores it.
+This reads the current key and hostname from the mounted CONFIG.INI, temporarily
+changes the mode, and restores it. You can also pass `--config-file PATH`; the
+`BOOTSWITCH_API_KEY` can supply a key when the configuration file is unavailable.
+The HTTP checks require an enabled API.
 It requires Python `requests`; the workspace PlatformIO environment includes it.
+
+To exercise USB configuration changes on a physical device, including temporary
+API-key rotation and provisioning Wi-Fi again while it is disabled:
+
+```sh
+.venv/bin/python tests/check_usb_settings.py --host DEVICE_IP \
+  --mount "/run/media/$USER/BOOTSWITCH" --offline-provisioning --disabled-services
+```
+
+The Linux/UDisks2 test saves a private recovery copy in `build/backups`, replaces
+CONFIG.INI using an editor-style temporary file and rename, ejects, checks the
+settings after restart, and restores the original configuration and boot mode.
 
 ## License
 

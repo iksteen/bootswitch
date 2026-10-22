@@ -6,44 +6,79 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <esp_heap_caps.h>
 #include <atomic>
+#include <cstring>
+#include <freertos/semphr.h>
 #include "tusb.h"
 #include "boot_disk.h"
-
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-// A build without local credentials is usable with the button; radio stays off.
-#define BOOTSWITCH_WIFI_SSID ""
-#define BOOTSWITCH_WIFI_PASSWORD ""
-#define BOOTSWITCH_CONTROL_PASSWORD ""
-#define BOOTSWITCH_HOSTNAME "bootswitch"
-#endif
+#include "settings.h"
+#include "virtual_disk.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
 #error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
 #endif
-static_assert(sizeof(BOOTSWITCH_CONTROL_PASSWORD) == 1 ||
-              (sizeof(BOOTSWITCH_CONTROL_PASSWORD) >= 17 &&
-               sizeof(BOOTSWITCH_CONTROL_PASSWORD) <= 97),
-              "Use a control password of 16 to 96 characters");
-
 using bootswitch::BootDisk;
 using bootswitch::Mode;
+using bootswitch::Settings;
+using bootswitch::VirtualDisk;
 
 namespace {
 USBMSC disk;
 Preferences preferences;
 WebServer server(80);
+Settings settings;
+uint8_t* diskBytes = nullptr;
+VirtualDisk virtualDisk(nullptr, 0);
+SemaphoreHandle_t diskMutex = nullptr;
+bool ramDiskReady = false;
+char configText[VirtualDisk::kMaxConfigSize + 1];
+std::atomic<bool> applyRequested{false};
+std::atomic<bool> diskEjected{false};
 std::atomic<Mode> selected{Mode::Linux};
 bool storageReady = false;
 bool usbReady = false;
 bool networkEnabled = false;
+bool apiEnabled = false;
 bool mdnsStarted = false;
 bool lastConnected = false;
 bool redraw = true;
 const char* problem = nullptr;
 uint32_t lastRetry = 0;
+uint32_t restartAt = 0;
+bool restartPending = false;
+
+void loadSettings() {
+  // USB/NVS configuration is the only settings source. Fresh devices and
+  // unreadable saved configurations start with both network services disabled.
+  settings = Settings{};
+  if (storageReady && preferences.isKey("settings")) {
+    const String saved = preferences.getString("settings");
+    if (const char* error = bootswitch::parseSettings(saved.c_str(), saved.length(), settings))
+      problem = error;
+  }
+  size_t length = 0;
+  if (!bootswitch::formatSettings(settings, configText, sizeof(configText), length)) return;
+  // Persist the initial empty configuration without inventing credentials.
+  if (storageReady && !preferences.isKey("settings") &&
+      preferences.putString("settings", configText) != length)
+    problem = "Settings save failed";
+  diskMutex = xSemaphoreCreateMutex();
+  diskBytes = static_cast<uint8_t*>(heap_caps_malloc(VirtualDisk::kCapacity,
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (diskMutex && diskBytes) {
+    virtualDisk = VirtualDisk(diskBytes, VirtualDisk::kCapacity);
+    ramDiskReady = virtualDisk.format(configText, length);
+  }
+  if (!ramDiskReady) {
+    if (diskBytes) heap_caps_free(diskBytes);
+    diskBytes = nullptr;
+    virtualDisk = VirtualDisk(nullptr, 0);
+    if (diskMutex) vSemaphoreDelete(diskMutex);
+    diskMutex = nullptr;
+    problem = "Config disk unavailable";
+  }
+}
 
 const char* modeName(Mode mode) {
   return mode == Mode::Windows ? "windows" : "linux";
@@ -64,12 +99,60 @@ bool setMode(Mode mode) {
 }
 
 int32_t readDisk(uint32_t lba, uint32_t offset, void* buffer, uint32_t size) {
-  return BootDisk::read(lba, offset, buffer, size, selected.load());
+  if (!ramDiskReady) return BootDisk::read(lba, offset, buffer, size, selected.load());
+  xSemaphoreTake(diskMutex, portMAX_DELAY);
+  const int32_t result = virtualDisk.read(lba, offset, buffer, size, selected.load());
+  xSemaphoreGive(diskMutex);
+  return result;
 }
 
-int32_t rejectWrite(uint32_t, uint32_t, uint8_t*, uint32_t) {
-  tud_msc_set_sense(0, SCSI_SENSE_DATA_PROTECT, 0x27, 0);
-  return -1;
+int32_t writeDisk(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t size) {
+  if (!ramDiskReady || diskEjected.load()) {
+    tud_msc_set_sense(0, SCSI_SENSE_DATA_PROTECT, 0x27, 0);
+    return -1;
+  }
+  xSemaphoreTake(diskMutex, portMAX_DELAY);
+  const int32_t result = diskEjected.load() ? -1 : virtualDisk.write(lba, offset, buffer, size);
+  xSemaphoreGive(diskMutex);
+  return result;
+}
+
+bool startStopDisk(uint8_t, bool start, bool loadEject) {
+  if (loadEject && !start && ramDiskReady) {
+    // Host has flushed its filesystem before issuing the eject command. Keep
+    // parsing, NVS writes, and restart work out of the USB callback/task.
+    diskEjected.store(true);
+    disk.mediaPresent(false);
+    applyRequested.store(true);
+  }
+  return true;
+}
+
+void applyConfiguration() {
+  if (!ramDiskReady || restartPending) return;
+  diskEjected.store(true);
+  disk.mediaPresent(false);
+  size_t length = 0;
+  xSemaphoreTake(diskMutex, portMAX_DELAY);
+  const char* error = virtualDisk.configuration(configText, sizeof(configText), length);
+  xSemaphoreGive(diskMutex);
+  Settings candidate;
+  if (!error) error = bootswitch::parseSettings(configText, length, candidate);
+  if (!error && !storageReady) error = "Settings unavailable";
+  if (!error) {
+    // Canonicalize before storing; comments, temp files and other host data
+    // never reach flash. One NVS value replaces all fields atomically.
+    bootswitch::formatSettings(candidate, configText, sizeof(configText), length);
+    const String current = preferences.getString("settings");
+    if (current != configText && preferences.putString("settings", configText) != length)
+      error = "Settings save failed";
+  }
+  problem = error ? error : "Config saved; restarting";
+  redraw = true;
+  if (!error) {
+    restartAt = millis() + 500;
+    restartPending = true;
+  }
 }
 
 const char kPage[] PROGMEM = R"HTML(<!doctype html>
@@ -87,9 +170,13 @@ refresh();setInterval(refresh,3000);
 </script></html>)HTML";
 
 bool authenticate() {
+  if (!apiEnabled || !settings.apiEnabled()) {
+    server.send(503, "text/plain", "API disabled");
+    return false;
+  }
   const String authorization = server.header("Authorization");
-  if (authorization == String("Bearer ") + BOOTSWITCH_CONTROL_PASSWORD ||
-      server.authenticate("admin", BOOTSWITCH_CONTROL_PASSWORD)) return true;
+  if (authorization == String("Bearer ") + settings.apiKey ||
+      server.authenticate("admin", settings.apiKey)) return true;
   server.requestAuthentication(DIGEST_AUTH, "BootSwitch");
   return false;
 }
@@ -121,9 +208,20 @@ void changeMode(Mode mode) {
 }
 
 void startNetwork() {
-  networkEnabled = strlen(BOOTSWITCH_WIFI_SSID) &&
-                   strlen(BOOTSWITCH_CONTROL_PASSWORD) >= 16;
-  if (!networkEnabled) return;
+  networkEnabled = settings.wifiEnabled() && !bootswitch::validateSettings(settings);
+  apiEnabled = networkEnabled && settings.apiEnabled();
+  if (!networkEnabled) {
+    WiFi.mode(WIFI_OFF);
+    return;
+  }
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setHostname(settings.hostname);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(settings.ssid, settings.password);
+  lastRetry = millis();
+  // Wi-Fi can connect without exposing any HTTP listener when no key is set.
+  if (!apiEnabled) return;
   const char* headers[] = {"Authorization", "X-Bootswitch"};
   server.collectHeaders(headers, 2);
   server.on("/", HTTP_GET, [] {
@@ -150,12 +248,7 @@ void startNetwork() {
                                     Mode::Windows : Mode::Linux);
   });
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(BOOTSWITCH_HOSTNAME);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(BOOTSWITCH_WIFI_SSID, BOOTSWITCH_WIFI_PASSWORD);
   server.begin();
-  lastRetry = millis();
 }
 
 void drawScreen() {
@@ -175,14 +268,19 @@ void drawScreen() {
   display.println(problem ? problem : "Button A: toggle");
   display.setCursor(8, 80);
   if (!usbReady) display.println("USB init failed");
-  else display.println("USB: boot selector");
+  else display.println(ramDiskReady ? "CONFIG.INI: eject to apply" : "USB: boot selector");
   display.setCursor(8, 98);
-  if (!networkEnabled) display.println("Wi-Fi: no config");
-  else if (WiFi.status() == WL_CONNECTED) display.print(WiFi.localIP());
+  if (!networkEnabled) display.println("Wi-Fi: off");
+  else if (WiFi.status() == WL_CONNECTED) {
+    display.print(WiFi.localIP());
+    if (!apiEnabled) display.print(" API off");
+  }
   else display.println("Wi-Fi: connecting...");
   redraw = false;
 }
 }  // namespace
+
+bool bootSwitchDiskWritable() { return ramDiskReady && !diskEjected.load(); }
 
 void setup() {
   storageReady = preferences.begin("bootswitch", false);
@@ -190,14 +288,16 @@ void setup() {
     selected.store(preferences.getUChar("mode", 0) == 1 ?
                    Mode::Windows : Mode::Linux);
   } else problem = "Settings unavailable";
+  loadSettings();
 
   // Enumerate USB before starting the display or network. Do not wait for Wi-Fi.
   disk.vendorID("BootSw");
   disk.productID("Boot selector");
-  disk.productRevision("1.0");
+  disk.productRevision("2.0");
+  USB.productName("BootSwitch StickS3");
   disk.onRead(readDisk);
-  disk.onWrite(rejectWrite);
-  disk.onStartStop([](uint8_t, bool, bool) { return true; });
+  disk.onWrite(writeDisk);
+  disk.onStartStop(startStopDisk);
   disk.mediaPresent(true);
   usbReady = disk.begin(BootDisk::kSectorCount, BootDisk::kSectorSize);
   if (usbReady) usbReady = USB.begin();
@@ -208,6 +308,7 @@ void setup() {
   config.internal_spk = false;
   config.internal_mic = false;
   M5.begin(config);
+  M5.BtnB.setHoldThresh(1500);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);
   startNetwork();
@@ -216,19 +317,21 @@ void setup() {
 
 void loop() {
   M5.update();
+  if (restartPending && int32_t(millis() - restartAt) >= 0) ESP.restart();
+  if (applyRequested.exchange(false) || M5.BtnB.wasHold()) applyConfiguration();
   if (M5.BtnA.wasPressed()) {
     setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
   }
   if (networkEnabled) {
-    server.handleClient();
+    if (apiEnabled) server.handleClient();
     const bool connected = WiFi.status() == WL_CONNECTED;
     if (connected != lastConnected) {
       lastConnected = connected;
       if (mdnsStarted) MDNS.end();
       mdnsStarted = false;
       if (connected) {
-        mdnsStarted = MDNS.begin(BOOTSWITCH_HOSTNAME);
-        if (mdnsStarted) MDNS.addService("http", "tcp", 80);
+        mdnsStarted = MDNS.begin(settings.hostname);
+        if (mdnsStarted && apiEnabled) MDNS.addService("http", "tcp", 80);
       }
       redraw = true;
     }

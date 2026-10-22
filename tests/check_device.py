@@ -1,27 +1,17 @@
 """Exercise a real BootSwitch over HTTP and optionally verify uncached USB reads.
 
-Uses the local include/secrets.h without printing credentials. Requires requests.
+Reads CONFIG.INI without printing credentials.
+Requires requests.
 Temporarily changes the selected mode and restores it, including on test failure.
 """
 import argparse
-import ast
 import mmap
 import os
 from pathlib import Path
-import re
 import time
 
 import requests
 from requests.auth import HTTPDigestAuth
-
-
-def setting(name):
-    config = Path(__file__).resolve().parent.parent / "include/secrets.h"
-    match = re.search(r'^\s*#define\s+' + name + r'\s+("(?:\\.|[^"\\])*")',
-                      config.read_text(), re.MULTILINE)
-    if not match:
-        raise ValueError(f"Missing {name} in local configuration")
-    return ast.literal_eval(match.group(1))
 
 
 def usb_mode(path):
@@ -39,9 +29,25 @@ def main():
     parser.add_argument("--host", help="Device IP or hostname; defaults to configured .local name")
     parser.add_argument("--usb-mode-file", type=Path,
                         help="Mounted MODE.TXT path, read with Linux O_DIRECT")
+    parser.add_argument("--config-file", type=Path,
+                        help="CONFIG.INI containing the current API key/hostname")
     args = parser.parse_args()
-    password = setting("BOOTSWITCH_CONTROL_PASSWORD")
-    host = args.host or setting("BOOTSWITCH_HOSTNAME") + ".local"
+    config = args.config_file
+    if not config and args.usb_mode_file:
+        candidate = args.usb_mode_file.with_name("CONFIG.INI")
+        if candidate.exists():
+            config = candidate
+    values = {}
+    if config:
+        for line in config.read_text(encoding="utf-8-sig").splitlines():
+            if not line.strip() or line.lstrip().startswith(("#", ";")):
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value
+    password = os.environ.get("BOOTSWITCH_API_KEY") or values.get("api_key")
+    if not password:
+        parser.error("API is disabled without a key; provide CONFIG.INI with a key or BOOTSWITCH_API_KEY")
+    host = args.host or values.get("hostname", "bootswitch") + ".local"
     base = f"http://{host}"
     session = requests.Session()
     session.trust_env = False

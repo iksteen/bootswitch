@@ -6,15 +6,15 @@
 namespace bootswitch {
 enum class Mode : uint8_t { Linux = 0, Windows = 1 };
 
-// A generated, immutable FAT16 partition inside a 16 MiB MBR disk. No flash/RAM
-// filesystem is shared with the host. Only the two file payloads depend on mode.
+// Generated base image of a 4 MiB MBR disk. The writable version lives in PSRAM;
+// boot selection is overlaid on reads, independent of host filesystem caching.
 class BootDisk {
  public:
   static constexpr uint32_t kSectorSize = 512;
-  static constexpr uint32_t kSectorCount = 32768;
+  static constexpr uint32_t kSectorCount = 8192;
   static constexpr uint32_t kPartitionStart = 2048;
   static constexpr uint32_t kVolumeSectors = kSectorCount - kPartitionStart;
-  static constexpr uint32_t kFatSectors = 120;
+  static constexpr uint32_t kFatSectors = 24;
   static constexpr uint32_t kRootSector = 1 + 2 * kFatSectors;
   static constexpr uint32_t kDataSector = kRootSector + 4;
   static constexpr uint32_t kSerial = 0xB0075E1E;

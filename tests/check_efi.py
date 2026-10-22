@@ -44,6 +44,7 @@ cases = [
     ("duplicate", ["linux", "windows"], "fallback.conf", False, True),
     ("os-oneshot", ["linux"], "windows.conf", True, True),
     ("missing-config", ["windows"], "fallback.conf", False, False),
+    ("writable-config-disk", ["config-disk"], "linux.conf", False, True),
 ]
 for name, devices, expected, seed, configured in cases:
     case = out / name
