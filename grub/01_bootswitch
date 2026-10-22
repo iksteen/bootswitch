@@ -1,0 +1,21 @@
+#!/bin/sh
+# Edit the two entry IDs below to match YOUR /boot/grub/grub.cfg, then install
+# this as /etc/grub.d/01_bootswitch and regenerate GRUB's configuration.
+cat << 'GRUB'
+insmod part_msdos
+insmod fat
+insmod search_fs_uuid
+set bootswitch_drive=
+set bootswitch_mode=
+search --no-floppy --fs-uuid --set=bootswitch_drive B007-5E1E
+if [ -n "${bootswitch_drive}" ]; then
+    if [ -f "(${bootswitch_drive})/SWITCH.CFG" ]; then
+        source "(${bootswitch_drive})/SWITCH.CFG"
+        if [ "${bootswitch_mode}" = "linux" ]; then
+            set default="YOUR-LINUX-MENUENTRY-ID"
+        elif [ "${bootswitch_mode}" = "windows" ]; then
+            set default="YOUR-WINDOWS-MENUENTRY-ID"
+        fi
+    fi
+fi
+GRUB

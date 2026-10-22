@@ -1,0 +1,7 @@
+# Copy to ESP/EFI/BootSwitch/bootswitch.conf. ASCII, at most 2047 bytes.
+# Set the entry IDs to the exact IDs printed by `bootctl list` on your PC.
+linux=YOUR-LINUX-ENTRY.conf
+windows=auto-windows
+# The bridge and systemd-boot must be on the same ESP. Do not point this at
+# the bridge itself or at EFI/BOOT/BOOTX64.EFI (which could lead back here).
+loader=\EFI\systemd\systemd-bootx64.efi

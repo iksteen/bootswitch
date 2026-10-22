@@ -1,0 +1,8 @@
+.pio/
+.pio-core/
+.venv/
+include/secrets.h
+build/
+efi/build/
+__pycache__/
+.aws/

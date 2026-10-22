@@ -1,0 +1,242 @@
+#include <Arduino.h>
+#include <M5Unified.h>
+#include <Preferences.h>
+#include <USB.h>
+#include <USBMSC.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <atomic>
+#include "tusb.h"
+#include "boot_disk.h"
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+// A build without local credentials is usable with the button; radio stays off.
+#define BOOTSWITCH_WIFI_SSID ""
+#define BOOTSWITCH_WIFI_PASSWORD ""
+#define BOOTSWITCH_CONTROL_PASSWORD ""
+#define BOOTSWITCH_HOSTNAME "bootswitch"
+#endif
+
+#if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
+#error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
+#endif
+static_assert(sizeof(BOOTSWITCH_CONTROL_PASSWORD) == 1 ||
+              (sizeof(BOOTSWITCH_CONTROL_PASSWORD) >= 17 &&
+               sizeof(BOOTSWITCH_CONTROL_PASSWORD) <= 97),
+              "Use a control password of 16 to 96 characters");
+
+using bootswitch::BootDisk;
+using bootswitch::Mode;
+
+namespace {
+USBMSC disk;
+Preferences preferences;
+WebServer server(80);
+std::atomic<Mode> selected{Mode::Linux};
+bool storageReady = false;
+bool usbReady = false;
+bool networkEnabled = false;
+bool mdnsStarted = false;
+bool lastConnected = false;
+bool redraw = true;
+const char* problem = nullptr;
+uint32_t lastRetry = 0;
+
+const char* modeName(Mode mode) {
+  return mode == Mode::Windows ? "windows" : "linux";
+}
+
+bool setMode(Mode mode) {
+  if (mode == selected.load()) return true;
+  if (!storageReady || preferences.putUChar("mode", uint8_t(mode)) != 1) {
+    problem = "Save failed";
+    redraw = true;
+    return false;
+  }
+  // Publish only after NVS confirms persistence; USB callbacks never touch NVS.
+  selected.store(mode);
+  problem = nullptr;
+  redraw = true;
+  return true;
+}
+
+int32_t readDisk(uint32_t lba, uint32_t offset, void* buffer, uint32_t size) {
+  return BootDisk::read(lba, offset, buffer, size, selected.load());
+}
+
+int32_t rejectWrite(uint32_t, uint32_t, uint8_t*, uint32_t) {
+  tud_msc_set_sense(0, SCSI_SENSE_DATA_PROTECT, 0x27, 0);
+  return -1;
+}
+
+const char kPage[] PROGMEM = R"HTML(<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>BootSwitch</title>
+<style>body{font:18px system-ui;max-width:32em;margin:12vh auto;padding:1em;background:#14202b;color:#f2f5f8}button{font:inherit;padding:.7em 1em;margin:.3em .3em .3em 0;cursor:pointer}output{display:block;margin:1em 0;font-size:2em}p{line-height:1.5}</style>
+<h1>BootSwitch</h1><p>Selected for the next boot:</p><output id="mode">Loading…</output>
+<button data-mode="linux">Linux</button><button data-mode="windows">Windows</button><button data-mode="toggle">Toggle</button>
+<p>This changes the saved selection. Start or restart your PC to use it.</p><p id="status" role="status"></p>
+<script>
+const mode=document.querySelector('#mode'),status=document.querySelector('#status');
+async function refresh(){try{const r=await fetch('/api/mode',{cache:'no-store'});if(!r.ok)throw Error('Read failed');const d=await r.json();mode.textContent=d.mode==='windows'?'Windows':'Linux';status.textContent=d.saved?'Selection saved':'Settings storage unavailable';}catch(e){status.textContent=e.message;}}
+document.querySelectorAll('button').forEach(b=>b.onclick=async()=>{document.querySelectorAll('button').forEach(x=>x.disabled=true);try{const action=b.dataset.mode;const r=await fetch(action==='toggle'?'/api/toggle':'/api/mode',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Bootswitch':'1'},body:action==='toggle'?'':'mode='+action});if(!r.ok)throw Error('Change failed ('+r.status+')');await refresh();}catch(e){status.textContent=e.message;}finally{document.querySelectorAll('button').forEach(x=>x.disabled=false);}});
+refresh();setInterval(refresh,3000);
+</script></html>)HTML";
+
+bool authenticate() {
+  const String authorization = server.header("Authorization");
+  if (authorization == String("Bearer ") + BOOTSWITCH_CONTROL_PASSWORD ||
+      server.authenticate("admin", BOOTSWITCH_CONTROL_PASSWORD)) return true;
+  server.requestAuthentication(DIGEST_AUTH, "BootSwitch");
+  return false;
+}
+
+void sendState() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", String("{\"mode\":\"") +
+      modeName(selected.load()) + "\",\"saved\":" +
+      (storageReady ? "true}" : "false}"));
+}
+
+bool authorizeChange() {
+  if (!authenticate()) return false;
+  // Require a non-simple header for browser requests. No CORS permission is
+  // granted, so third-party pages cannot submit authenticated mutations.
+  if (server.header("X-Bootswitch") != "1") {
+    server.send(403, "text/plain", "X-Bootswitch: 1 required");
+    return false;
+  }
+  return true;
+}
+
+void changeMode(Mode mode) {
+  if (!setMode(mode)) {
+    server.send(503, "text/plain", "Could not save selection");
+    return;
+  }
+  sendState();
+}
+
+void startNetwork() {
+  networkEnabled = strlen(BOOTSWITCH_WIFI_SSID) &&
+                   strlen(BOOTSWITCH_CONTROL_PASSWORD) >= 16;
+  if (!networkEnabled) return;
+  const char* headers[] = {"Authorization", "X-Bootswitch"};
+  server.collectHeaders(headers, 2);
+  server.on("/", HTTP_GET, [] {
+    if (!authenticate()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("X-Content-Type-Options", "nosniff");
+    server.sendHeader("X-Frame-Options", "DENY");
+    server.send_P(200, "text/html; charset=utf-8", kPage);
+  });
+  server.on("/api/mode", HTTP_GET, [] {
+    if (authenticate()) sendState();
+  });
+  server.on("/api/mode", HTTP_POST, [] {
+    if (!authorizeChange()) return;
+    const String value = server.arg("mode");
+    if (value != "linux" && value != "windows") {
+      server.send(400, "text/plain", "mode must be linux or windows");
+      return;
+    }
+    changeMode(value == "windows" ? Mode::Windows : Mode::Linux);
+  });
+  server.on("/api/toggle", HTTP_POST, [] {
+    if (authorizeChange()) changeMode(selected.load() == Mode::Linux ?
+                                    Mode::Windows : Mode::Linux);
+  });
+  server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(BOOTSWITCH_HOSTNAME);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(BOOTSWITCH_WIFI_SSID, BOOTSWITCH_WIFI_PASSWORD);
+  server.begin();
+  lastRetry = millis();
+}
+
+void drawScreen() {
+  auto& display = M5.Display;
+  display.fillScreen(TFT_BLACK);
+  display.setCursor(8, 5);
+  display.setTextSize(1);
+  display.setTextColor(TFT_LIGHTGREY);
+  display.println("NEXT BOOT");
+  display.setCursor(8, 26);
+  display.setTextSize(3);
+  display.setTextColor(selected.load() == Mode::Windows ? TFT_CYAN : TFT_GREEN);
+  display.println(selected.load() == Mode::Windows ? "Windows" : "Linux");
+  display.setTextSize(1);
+  display.setTextColor(TFT_WHITE);
+  display.setCursor(8, 62);
+  display.println(problem ? problem : "Button A: toggle");
+  display.setCursor(8, 80);
+  if (!usbReady) display.println("USB init failed");
+  else display.println("USB: boot selector");
+  display.setCursor(8, 98);
+  if (!networkEnabled) display.println("Wi-Fi: no config");
+  else if (WiFi.status() == WL_CONNECTED) display.print(WiFi.localIP());
+  else display.println("Wi-Fi: connecting...");
+  redraw = false;
+}
+}  // namespace
+
+void setup() {
+  storageReady = preferences.begin("bootswitch", false);
+  if (storageReady) {
+    selected.store(preferences.getUChar("mode", 0) == 1 ?
+                   Mode::Windows : Mode::Linux);
+  } else problem = "Settings unavailable";
+
+  // Enumerate USB before starting the display or network. Do not wait for Wi-Fi.
+  disk.vendorID("BootSw");
+  disk.productID("Boot selector");
+  disk.productRevision("1.0");
+  disk.onRead(readDisk);
+  disk.onWrite(rejectWrite);
+  disk.onStartStop([](uint8_t, bool, bool) { return true; });
+  disk.mediaPresent(true);
+  usbReady = disk.begin(BootDisk::kSectorCount, BootDisk::kSectorSize);
+  if (usbReady) usbReady = USB.begin();
+
+  auto config = M5.config();
+  config.internal_imu = false;
+  config.internal_rtc = false;
+  config.internal_spk = false;
+  config.internal_mic = false;
+  M5.begin(config);
+  M5.Display.setRotation(1);
+  M5.Display.setBrightness(60);
+  startNetwork();
+  drawScreen();
+}
+
+void loop() {
+  M5.update();
+  if (M5.BtnA.wasPressed()) {
+    setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
+  }
+  if (networkEnabled) {
+    server.handleClient();
+    const bool connected = WiFi.status() == WL_CONNECTED;
+    if (connected != lastConnected) {
+      lastConnected = connected;
+      if (mdnsStarted) MDNS.end();
+      mdnsStarted = false;
+      if (connected) {
+        mdnsStarted = MDNS.begin(BOOTSWITCH_HOSTNAME);
+        if (mdnsStarted) MDNS.addService("http", "tcp", 80);
+      }
+      redraw = true;
+    }
+    if (!connected && uint32_t(millis() - lastRetry) >= 30000) {
+      lastRetry = millis();
+      WiFi.reconnect();
+    }
+  }
+  if (redraw) drawScreen();
+  delay(5);
+}
