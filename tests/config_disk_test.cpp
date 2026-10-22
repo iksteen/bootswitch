@@ -22,6 +22,7 @@ bool sameSettings(const Settings& a, const Settings& b) {
          std::strcmp(a.password, b.password) == 0 &&
          std::strcmp(a.apiKey, b.apiKey) == 0 &&
          std::strcmp(a.hostname, b.hostname) == 0 &&
+         std::strcmp(a.blePasskey, b.blePasskey) == 0 &&
          a.screenTimeoutSeconds == b.screenTimeoutSeconds;
 }
 
@@ -45,6 +46,11 @@ void parserTests() {
   rejects(valid + "api_key=0123456789abcdef\n");
   rejects(valid + "typo=value\n");
   rejects(valid + "not-an-assignment\n");
+  rejects(valid + "ble_passkey=12345\n");
+  rejects(valid + "ble_passkey=1234567\n");
+  rejects(valid + "ble_passkey=12345x\n");
+  rejects(valid + "ble_passkey= 12345\n");
+  rejects(valid + "ble_passkey=123456\nble_passkey=654321\n");
   for (const char* invalid : {"", "-1", "+1", "1.5", " 60", "60 ", "4294968",
                               "4294967296", "99999999999999999999999"})
     rejects(valid + "screen_timeout=" + invalid + "\n");
@@ -97,6 +103,7 @@ void parserTests() {
   assert(formatSettings(empty, serialized, sizeof(serialized), length));
   assert(!parseSettings(serialized, length, roundtrip));
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
+  assert(!roundtrip.bleEnabled());
   assert(roundtrip.screenTimeoutSeconds == 60);
   for (const uint32_t seconds : {0u, 1u, 120u, Settings::kMaxScreenTimeoutSeconds}) {
     const std::string text = valid + "screen_timeout=" + std::to_string(seconds) + "\n";
@@ -111,7 +118,20 @@ void parserTests() {
   invalidTimeout.screenTimeoutSeconds = Settings::kMaxScreenTimeoutSeconds + 1;
   assert(validateSettings(invalidTimeout));
   assert(!formatSettings(invalidTimeout, serialized, sizeof(serialized), length));
-
+  // BLE is opt-in, independent of Wi-Fi and HTTP, with exact six-digit PINs.
+  const std::string bleOnly = "ble_passkey=012345\n";
+  assert(!parseSettings(bleOnly.data(), bleOnly.size(), roundtrip));
+  assert(roundtrip.bleEnabled() && !roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
+  assert(std::strcmp(roundtrip.blePasskey, "012345") == 0);
+  assert(formatSettings(roundtrip, serialized, sizeof(serialized), length));
+  Settings bleRoundtrip;
+  assert(!parseSettings(serialized, length, bleRoundtrip));
+  assert(std::strcmp(bleRoundtrip.blePasskey, "012345") == 0);
+  assert(!parseSettings(valid.data(), valid.size(), roundtrip));
+  assert(!roundtrip.bleEnabled());  // Existing saved configurations remain valid.
+  const std::string blankBle = valid + "ble_passkey=\n";
+  assert(!parseSettings(blankBle.data(), blankBle.size(), roundtrip));
+  assert(!roundtrip.bleEnabled());
 }
 
 int main(int argc, char** argv) {

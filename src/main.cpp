@@ -13,6 +13,7 @@
 #include "tusb.h"
 #include "device/dcd.h"
 #include "boot_disk.h"
+#include "ble_control.h"
 #include "settings.h"
 #include "virtual_disk.h"
 
@@ -23,6 +24,7 @@ using bootswitch::BootDisk;
 using bootswitch::Mode;
 using bootswitch::Settings;
 using bootswitch::VirtualDisk;
+using bootswitch::BleCommand;
 
 namespace {
 USBMSC disk;
@@ -109,6 +111,7 @@ bool setMode(Mode mode) {
   }
   // Publish only after NVS confirms persistence; USB callbacks never touch NVS.
   selected.store(mode);
+  bootswitch::publishBleMode(mode);
   problem = nullptr;
   redraw = true;
   return true;
@@ -268,6 +271,18 @@ void startNetwork() {
   server.begin();
 }
 
+void startBluetooth() {
+  if (!settings.bleEnabled()) return;
+  if (!storageReady) { problem = "BLE settings unavailable"; return; }
+  const bool newPasskey = preferences.getString("ble-passkey") != settings.blePasskey;
+  const char* error = bootswitch::startBle(settings, selected.load(), newPasskey);
+  if (!error && newPasskey && preferences.putString("ble-passkey", settings.blePasskey) != 6) {
+    bootswitch::stopBle();
+    error = "BLE settings save failed";
+  }
+  if (error) problem = error;
+}
+
 void drawScreen() {
   auto& display = M5.Display;
   display.fillScreen(TFT_BLACK);
@@ -293,6 +308,8 @@ void drawScreen() {
     if (!apiEnabled) display.print(" API off");
   }
   else display.println("Wi-Fi: connecting...");
+  display.setCursor(8, 116);
+  display.println(bootswitch::bleActive() ? "BLE: on (PIN pairing)" : "BLE: off");
   redraw = false;
 }
 }  // namespace
@@ -337,6 +354,7 @@ void setup() {
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);
   startNetwork();
+  startBluetooth();
   lastDisplayActivity = millis();
   drawScreen();
 }
@@ -351,6 +369,13 @@ void loop() {
     // A dark screen requires a separate wake press, avoiding a blind OS change.
     if (!screenAwake) wakeDisplay();
     else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
+  }
+  const BleCommand command = bootswitch::nextBleCommand();
+  if (command != BleCommand::None) {
+    const Mode mode = command == BleCommand::Toggle ?
+        (selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux) :
+        (command == BleCommand::Windows ? Mode::Windows : Mode::Linux);
+    setMode(mode);
   }
   if (networkEnabled) {
     if (apiEnabled) server.handleClient();

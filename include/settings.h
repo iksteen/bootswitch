@@ -11,10 +11,12 @@ struct Settings {
   char password[65] = {};
   char apiKey[97] = {};
   char hostname[64] = "bootswitch";
+  char blePasskey[7] = {};
   uint32_t screenTimeoutSeconds = 60;
 
   bool wifiEnabled() const { return ssid[0] != 0; }
   bool apiEnabled() const { return apiKey[0] != 0; }
+  bool bleEnabled() const { return blePasskey[0] != 0; }
 };
 
 // Values are literal UTF-8 bytes after '='; only keys are whitespace-trimmed.

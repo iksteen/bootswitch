@@ -44,7 +44,8 @@ const char* validateSettings(const Settings& s) {
   if (!std::memchr(s.ssid, 0, sizeof(s.ssid)) ||
       !std::memchr(s.password, 0, sizeof(s.password)) ||
       !std::memchr(s.apiKey, 0, sizeof(s.apiKey)) ||
-      !std::memchr(s.hostname, 0, sizeof(s.hostname))) return "Setting too long";
+      !std::memchr(s.hostname, 0, sizeof(s.hostname)) ||
+      !std::memchr(s.blePasskey, 0, sizeof(s.blePasskey))) return "Setting too long";
   if (!textValue(s.ssid) || !textValue(s.password)) return "Invalid Wi-Fi text";
   const size_t passwordLength = std::strlen(s.password);
   if (s.wifiEnabled() && passwordLength && (passwordLength < 8 ||
@@ -60,6 +61,12 @@ const char* validateSettings(const Settings& s) {
   for (const char* c = s.hostname; *c; ++c) {
     if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-'))
       return "Invalid hostname";
+  }
+  if (s.bleEnabled()) {
+    if (std::strlen(s.blePasskey) != 6) return "BLE passkey: 6 digits";
+    for (const char* c = s.blePasskey; *c; ++c) {
+      if (*c < '0' || *c > '9') return "BLE passkey: 6 digits";
+    }
   }
   return nullptr;
 }
@@ -95,6 +102,7 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
       {"wifi_password", candidate.password, sizeof(candidate.password), 2},
       {"api_key", candidate.apiKey, sizeof(candidate.apiKey), 4},
       {"hostname", candidate.hostname, sizeof(candidate.hostname), 8},
+      {"ble_passkey", candidate.blePasskey, sizeof(candidate.blePasskey), 16},
       {"screen_timeout", timeoutText, sizeof(timeoutText), 32},
     };
     for (const auto& field : fields) {
@@ -132,9 +140,10 @@ bool formatSettings(const Settings& s, char* output, size_t capacity, size_t& le
       "# Values are literal: no quotes or spaces added around '='.\r\n"
       "# Credentials are readable by anyone with access to this USB disk.\r\n"
       "wifi_ssid=%s\r\nwifi_password=%s\r\napi_key=%s\r\nhostname=%s\r\n"
+      "ble_passkey=%s\r\n"
       "# Screen timeout in seconds; 0 keeps the display on.\r\n"
       "screen_timeout=%" PRIu32 "\r\n",
-      s.ssid, s.password, s.apiKey, s.hostname, s.screenTimeoutSeconds);
+      s.ssid, s.password, s.apiKey, s.hostname, s.blePasskey, s.screenTimeoutSeconds);
   if (written < 0 || static_cast<size_t>(written) >= capacity) return false;
   length = static_cast<size_t>(written);
   return true;

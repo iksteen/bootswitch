@@ -1,8 +1,8 @@
 # BootSwitch for M5Stack StickS3
 
 Select Linux or Windows with the StickS3's **front A button**, a Wi-Fi web page,
-or an HTTP API. The display shows the saved choice. Selection survives power
-loss and applies when your PC next reads the device during boot. This does not
+an HTTP API, or optional Bluetooth LE. The display shows the saved choice.
+Selection survives power loss and applies when your PC next reads the device during boot. This does not
 power on, restart, or switch a running PC into another OS.
 
 Inspired by Stephen Holdaway's [Hardware boot selection switch](https://hackaday.io/project/179539-hardware-boot-selection-switch).
@@ -72,6 +72,7 @@ first boot, Wi-Fi credentials and the API key are empty, so **Wi-Fi and HTTP/API
 are disabled**. Configure them through `CONFIG.INI`; validated edits are retained
 in NVS and restored into the file at startup. Existing USB-saved settings survive
 firmware updates. No credentials or API keys are generated automatically.
+BLE is disabled until you configure a `ble_passkey` through the USB disk.
 
 ## Edit settings over USB
 
@@ -82,6 +83,7 @@ wifi_ssid=
 wifi_password=
 api_key=
 hostname=bootswitch
+ble_passkey=
 screen_timeout=60
 ```
 
@@ -118,6 +120,9 @@ saved CONFIG.INI, then edit it again.
 - API key: empty to disable HTTP/API, otherwise 16–96 printable ASCII characters
   without whitespace. Hostname: 1–63 lowercase letters, digits and hyphens,
   without a leading or trailing hyphen.
+- BLE: blank or omitted `ble_passkey` keeps Bluetooth off. Set exactly six digits
+  (including leading zeros) to enable PIN-protected BLE independently of Wi-Fi
+  and the API key. Use your own PIN; it is readable on this USB disk too.
 - `screen_timeout`: seconds before the display sleeps. Defaults to `60` when
   omitted; `0` keeps it always on. Accepts whole numbers from 0 to 4294967.
 - CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its boot
@@ -135,7 +140,7 @@ Each successful change is saved to NVS before it appears on USB or the display.
 A save error is shown instead of acknowledging an unsaved change.
 
 The display sleeps after `screen_timeout` seconds (**60 by default**) without a
-button press, a web/API mode command, or a USB reset/resume event. Set
+button press, a web/API or BLE mode command, or a USB reset/resume event. Set
 `screen_timeout=0` in CONFIG.INI to keep it always on. Only the display sleeps: USB storage and
 Wi-Fi continue working. USB reset/resume wakes it automatically, including during
 normal host reboots and cable reconnection. These events also occur during some
@@ -171,6 +176,46 @@ The browser uses HTTP Digest authentication. The API and page use HTTP on your
 LAN; HTTP is unencrypted and bearer tokens can be observed on that network. Use
 a trusted LAN or VPN, without forwarding this service to the public Internet.
 Wi-Fi connects/reconnects independently of USB; no network is needed to boot.
+
+## Optional BLE control
+
+Set `ble_passkey` in CONFIG.INI to your own six-digit PIN, save, and safely eject
+as usual. Leave it empty to disable BLE. The device advertises its `hostname`
+(default `bootswitch`; the BLE scan name is limited to 29 characters). BLE works
+with Wi-Fi off. Control requires PIN-authenticated, encrypted pairing; phones
+can retain their bond across device reboots. Changing the PIN clears the device's
+old bonds on startup; also forget/unpair it on your phone before pairing again.
+
+In [BLESPloit's GATT browser](https://blesplo.it/docs/mobile/connections/):
+
+1. Scan for `bootswitch` (or your hostname), then use the **link/manual connection**
+   control and open **Device Services**.
+2. Find service `7e6e0001-bb6e-4b08-8e8a-fc9f1b6a4450`.
+3. Read the **state** characteristic ending in `0002` below. If prompted, pair
+   using the PIN you put in CONFIG.INI. If necessary, pair in your phone's
+   Bluetooth settings first, then reconnect in BLESPloit.
+4. Write one of these exact lowercase UTF-8/ASCII values to the **command**
+   characteristic ending in `0003`. Use a normal write **with response**.
+
+| Command | Hex bytes (if the app uses a hex editor) |
+| --- | --- |
+| `toggle` | `74 6f 67 67 6c 65` |
+| `linux` | `6c 69 6e 75 78` |
+| `windows` | `77 69 6e 64 6f 77 73` |
+
+| Characteristic | UUID | Access |
+| --- | --- | --- |
+| Saved mode | `7e6e0002-bb6e-4b08-8e8a-fc9f1b6a4450` | Read / notify; returns `linux` or `windows` |
+| Command | `7e6e0003-bb6e-4b08-8e8a-fc9f1b6a4450` | Write with response; accepts the commands above |
+
+Do not include quotes, a newline, or a trailing NUL. Invalid commands are ignored.
+Commands enter a bounded eight-command queue; excess writes are ignored. The BLE
+write response acknowledges receipt, before the firmware saves the selection.
+Read the state characteristic after processing or subscribe to its notifications
+to confirm the saved result. Physical buttons and Wi-Fi changes update it too.
+BLE mode commands wake the screen and restart its configured timer; scanning,
+connecting, and reading the state do not. For automation, explicit `linux` and
+`windows` commands are safe to retry; `toggle` can toggle twice if repeated.
 
 ## systemd-boot setup (x86-64 UEFI)
 
