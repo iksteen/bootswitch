@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <cstdio>
+#include <cinttypes>
 #include <cstring>
 
 namespace bootswitch {
@@ -20,9 +21,25 @@ bool hexKey(const char* value) {
   }
   return true;
 }
+
+const char* screenTimeout(const char* value, uint32_t& seconds) {
+  if (!*value) return "Screen timeout: seconds";
+  uint32_t parsed = 0;
+  for (; *value; ++value) {
+    if (*value < '0' || *value > '9') return "Screen timeout: seconds";
+    const uint32_t digit = *value - '0';
+    if (parsed > (Settings::kMaxScreenTimeoutSeconds - digit) / 10u)
+      return "Screen timeout out of range";
+    parsed = parsed * 10u + digit;
+  }
+  seconds = parsed;
+  return nullptr;
+}
 }  // namespace
 
 const char* validateSettings(const Settings& s) {
+  if (s.screenTimeoutSeconds > Settings::kMaxScreenTimeoutSeconds)
+    return "Screen timeout out of range";
   // Arrays must be terminated even when loading untrusted settings.
   if (!std::memchr(s.ssid, 0, sizeof(s.ssid)) ||
       !std::memchr(s.password, 0, sizeof(s.password)) ||
@@ -50,6 +67,7 @@ const char* validateSettings(const Settings& s) {
 const char* parseSettings(const char* text, size_t length, Settings& output) {
   if (!text || std::memchr(text, 0, length)) return "Invalid config text";
   Settings candidate;
+  char timeoutText[11] = {};
   unsigned seen = 0;
   size_t position = 0;
   // UTF-8 BOM from Windows text editors is allowed.
@@ -77,6 +95,7 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
       {"wifi_password", candidate.password, sizeof(candidate.password), 2},
       {"api_key", candidate.apiKey, sizeof(candidate.apiKey), 4},
       {"hostname", candidate.hostname, sizeof(candidate.hostname), 8},
+      {"screen_timeout", timeoutText, sizeof(timeoutText), 32},
     };
     for (const auto& field : fields) {
       if (std::strlen(field.name) == keyEnd - keyStart &&
@@ -95,7 +114,11 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
     std::memcpy(destination, text + equals + 1, valueLength);
     destination[valueLength] = 0;
   }
-  // Omitted fields use disabled-service defaults. In particular, removing an
+  if (seen & 32) {
+    if (const char* error = screenTimeout(timeoutText, candidate.screenTimeoutSeconds))
+      return error;
+  }
+  // Omitted fields use defaults. In particular, removing an
   // API key must never preserve old credentials or enable anonymous access.
   if (const char* error = validateSettings(candidate)) return error;
   output = candidate;
@@ -108,8 +131,10 @@ bool formatSettings(const Settings& s, char* output, size_t capacity, size_t& le
       "# BootSwitch settings: edit, save, then safely eject to apply.\r\n"
       "# Values are literal: no quotes or spaces added around '='.\r\n"
       "# Credentials are readable by anyone with access to this USB disk.\r\n"
-      "wifi_ssid=%s\r\nwifi_password=%s\r\napi_key=%s\r\nhostname=%s\r\n",
-      s.ssid, s.password, s.apiKey, s.hostname);
+      "wifi_ssid=%s\r\nwifi_password=%s\r\napi_key=%s\r\nhostname=%s\r\n"
+      "# Screen timeout in seconds; 0 keeps the display on.\r\n"
+      "screen_timeout=%" PRIu32 "\r\n",
+      s.ssid, s.password, s.apiKey, s.hostname, s.screenTimeoutSeconds);
   if (written < 0 || static_cast<size_t>(written) >= capacity) return false;
   length = static_cast<size_t>(written);
   return true;

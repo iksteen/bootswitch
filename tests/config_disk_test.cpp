@@ -17,6 +17,14 @@ static const std::string valid =
     "api_key=0123456789abcdef0123456789abcdef\n"
     "hostname=bootswitch\n";
 
+bool sameSettings(const Settings& a, const Settings& b) {
+  return std::strcmp(a.ssid, b.ssid) == 0 &&
+         std::strcmp(a.password, b.password) == 0 &&
+         std::strcmp(a.apiKey, b.apiKey) == 0 &&
+         std::strcmp(a.hostname, b.hostname) == 0 &&
+         a.screenTimeoutSeconds == b.screenTimeoutSeconds;
+}
+
 void parserTests() {
   Settings settings;
   assert(!parseSettings(valid.data(), valid.size(), settings));
@@ -26,17 +34,21 @@ void parserTests() {
   assert(formatSettings(settings, serialized, sizeof(serialized), length));
   Settings roundtrip;
   assert(!parseSettings(serialized, length, roundtrip));
-  assert(std::memcmp(&settings, &roundtrip, sizeof(settings)) == 0);
+  assert(sameSettings(settings, roundtrip));
   assert(!formatSettings(settings, serialized, 8, length));
 
   auto rejects = [&](const std::string& text) {
     Settings unchanged = settings;
     assert(parseSettings(text.data(), text.size(), unchanged));
-    assert(std::memcmp(&settings, &unchanged, sizeof(settings)) == 0);
+    assert(sameSettings(settings, unchanged));
   };
   rejects(valid + "api_key=0123456789abcdef\n");
   rejects(valid + "typo=value\n");
   rejects(valid + "not-an-assignment\n");
+  for (const char* invalid : {"", "-1", "+1", "1.5", " 60", "60 ", "4294968",
+                              "4294967296", "99999999999999999999999"})
+    rejects(valid + "screen_timeout=" + invalid + "\n");
+  rejects(valid + "screen_timeout=0\nscreen_timeout=60\n");
   rejects("wifi_ssid=" + std::string(33, 'x') + "\nwifi_password=\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=short\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=\napi_key=short\nhostname=test\n");
@@ -65,6 +77,7 @@ void parserTests() {
   assert(!empty.wifiEnabled() && !empty.apiEnabled());
   assert(std::strcmp(empty.hostname, "bootswitch") == 0);
   assert(!validateSettings(empty));
+  assert(empty.screenTimeoutSeconds == 60);
   assert(!parseSettings("", 0, roundtrip));
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
   assert(!parseSettings("# No credentials\n", 17, roundtrip));
@@ -84,6 +97,21 @@ void parserTests() {
   assert(formatSettings(empty, serialized, sizeof(serialized), length));
   assert(!parseSettings(serialized, length, roundtrip));
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
+  assert(roundtrip.screenTimeoutSeconds == 60);
+  for (const uint32_t seconds : {0u, 1u, 120u, Settings::kMaxScreenTimeoutSeconds}) {
+    const std::string text = valid + "screen_timeout=" + std::to_string(seconds) + "\n";
+    assert(!parseSettings(text.data(), text.size(), roundtrip));
+    assert(roundtrip.screenTimeoutSeconds == seconds);
+    assert(formatSettings(roundtrip, serialized, sizeof(serialized), length));
+    Settings restored;
+    assert(!parseSettings(serialized, length, restored));
+    assert(restored.screenTimeoutSeconds == seconds);
+  }
+  Settings invalidTimeout;
+  invalidTimeout.screenTimeoutSeconds = Settings::kMaxScreenTimeoutSeconds + 1;
+  assert(validateSettings(invalidTimeout));
+  assert(!formatSettings(invalidTimeout, serialized, sizeof(serialized), length));
+
 }
 
 int main(int argc, char** argv) {

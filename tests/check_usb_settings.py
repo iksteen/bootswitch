@@ -149,7 +149,9 @@ def main():
             print("USB settings disabled Wi-Fi; configuration disk remains usable offline.", flush=True)
         if args.disabled_services:
             replace_and_eject("")
-            assert remount() == {"wifi_ssid": "", "wifi_password": "", "api_key": "", "hostname": "bootswitch"}
+            assert remount() == {"wifi_ssid": "", "wifi_password": "", "api_key": "",
+                                 "hostname": "bootswitch",
+                                 "screen_timeout": "60"}
             verify_http_off()
             print("Empty CONFIG.INI: no Wi-Fi credentials or API key invented; both services off.", flush=True)
     finally:

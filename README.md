@@ -33,7 +33,7 @@ The StickS3 exposes a data disk, not an OS boot disk.
 For Wi-Fi access while the PC is off, use a USB port that supplies standby power
 (motherboard settings such as ErP may disable this), or a suitable powered USB hub
 that retains power without backfeeding the host. The built-in 250 mAh battery is
-only a temporary power source. Avoid sleep modes: the selector needs USB and
+only a temporary power source. Avoid ESP32 sleep modes: the selector needs USB and
 Wi-Fi running. Do not splice a second power supply into the USB cable.
 
 ## Build and flash the StickS3
@@ -82,10 +82,11 @@ wifi_ssid=
 wifi_password=
 api_key=
 hostname=bootswitch
+screen_timeout=60
 ```
 
 Save and close the file, then **safely eject** the USB drive. The StickS3 validates
-the complete file, saves all four settings together, and restarts to apply them.
+the complete file, saves all settings together, and restarts to apply them.
 Its selected OS is retained. The disk reappears with the saved settings. Ordinary
 saves and editors that replace files using a temporary file/rename are supported.
 On Linux, use **Eject**, rather than just Unmount or Power Off; for example:
@@ -117,6 +118,8 @@ saved CONFIG.INI, then edit it again.
 - API key: empty to disable HTTP/API, otherwise 16–96 printable ASCII characters
   without whitespace. Hostname: 1–63 lowercase letters, digits and hyphens,
   without a leading or trailing hyphen.
+- `screen_timeout`: seconds before the display sleeps. Defaults to `60` when
+  omitted; `0` keeps it always on. Accepts whole numbers from 0 to 4294967.
 - CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its boot
   files. Other files and editor backups exist only in RAM and disappear on restart.
 
@@ -126,9 +129,21 @@ Changing the key invalidates the previous web/API password after the restart.
 
 ## Button and Wi-Fi control
 
-Press A once to toggle. The first boot defaults to Linux. Each successful change
-is saved to NVS before it appears on USB or the display. A save error is shown
-instead of acknowledging an unsaved change.
+While the screen is on, press A once to toggle. When it is off, the first press
+only wakes the screen; press again to toggle. The first boot defaults to Linux.
+Each successful change is saved to NVS before it appears on USB or the display.
+A save error is shown instead of acknowledging an unsaved change.
+
+The display sleeps after `screen_timeout` seconds (**60 by default**) without a
+button press, a web/API mode command, or a USB reset/resume event. Set
+`screen_timeout=0` in CONFIG.INI to keep it always on. Only the display sleeps: USB storage and
+Wi-Fi continue working. USB reset/resume wakes it automatically, including during
+normal host reboots and cable reconnection. These events also occur during some
+sleep/wake transitions or USB resets; they are not definitive reboot detection.
+A reboot that leaves the USB connection untouched cannot be detected this way.
+Routine disk access, web-page polling, and Wi-Fi reconnection do not wake the
+display or extend its timer. The side B user button also wakes it; holding B still
+applies USB settings after flushing and unmounting the disk.
 
 Visit `http://bootswitch.local/` or the IP shown on screen. Sign in as **admin**
 using the `api_key` from CONFIG.INI. The page offers Linux, Windows, and Toggle controls.

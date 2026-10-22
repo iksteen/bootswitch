@@ -11,6 +11,7 @@
 #include <cstring>
 #include <freertos/semphr.h>
 #include "tusb.h"
+#include "device/dcd.h"
 #include "boot_disk.h"
 #include "settings.h"
 #include "virtual_disk.h"
@@ -35,6 +36,9 @@ bool ramDiskReady = false;
 char configText[VirtualDisk::kMaxConfigSize + 1];
 std::atomic<bool> applyRequested{false};
 std::atomic<bool> diskEjected{false};
+// The TinyUSB event hook can run in an ISR; only hand off a lock-free flag.
+static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "USB wake flag must be ISR safe");
+std::atomic<bool> usbWakeRequested{false};
 std::atomic<Mode> selected{Mode::Linux};
 bool storageReady = false;
 bool usbReady = false;
@@ -47,6 +51,17 @@ const char* problem = nullptr;
 uint32_t lastRetry = 0;
 uint32_t restartAt = 0;
 bool restartPending = false;
+bool screenAwake = true;
+uint32_t lastDisplayActivity = 0;
+
+void wakeDisplay() {
+  lastDisplayActivity = millis();
+  if (!screenAwake) {
+    screenAwake = true;
+    M5.Display.wakeup();
+    redraw = true;
+  }
+}
 
 void loadSettings() {
   // USB/NVS configuration is the only settings source. Fresh devices and
@@ -85,6 +100,7 @@ const char* modeName(Mode mode) {
 }
 
 bool setMode(Mode mode) {
+  wakeDisplay();
   if (mode == selected.load()) return true;
   if (!storageReady || preferences.putUChar("mode", uint8_t(mode)) != 1) {
     problem = "Save failed";
@@ -130,6 +146,7 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
 
 void applyConfiguration() {
   if (!ramDiskReady || restartPending) return;
+  wakeDisplay();
   diskEjected.store(true);
   disk.mediaPresent(false);
   size_t length = 0;
@@ -282,6 +299,14 @@ void drawScreen() {
 
 bool bootSwitchDiskWritable() { return ramDiskReady && !diskEjected.load(); }
 
+// A bus reset normally accompanies reboot/re-enumeration; resume also covers
+// waking a suspended host. Neither event proves that the host actually rebooted.
+// Do not wake on transfers: OS storage probes would keep the screen on forever.
+extern "C" void IRAM_ATTR tud_event_hook_cb(uint8_t, uint32_t eventId, bool) {
+  if (eventId == DCD_EVENT_BUS_RESET || eventId == DCD_EVENT_RESUME)
+    usbWakeRequested.store(true, std::memory_order_relaxed);
+}
+
 void setup() {
   storageReady = preferences.begin("bootswitch", false);
   if (storageReady) {
@@ -312,15 +337,20 @@ void setup() {
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);
   startNetwork();
+  lastDisplayActivity = millis();
   drawScreen();
 }
 
 void loop() {
   M5.update();
+  if (usbWakeRequested.exchange(false, std::memory_order_relaxed)) wakeDisplay();
   if (restartPending && int32_t(millis() - restartAt) >= 0) ESP.restart();
+  if (M5.BtnB.wasPressed()) wakeDisplay();
   if (applyRequested.exchange(false) || M5.BtnB.wasHold()) applyConfiguration();
   if (M5.BtnA.wasPressed()) {
-    setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
+    // A dark screen requires a separate wake press, avoiding a blind OS change.
+    if (!screenAwake) wakeDisplay();
+    else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
   }
   if (networkEnabled) {
     if (apiEnabled) server.handleClient();
@@ -340,6 +370,11 @@ void loop() {
       WiFi.reconnect();
     }
   }
-  if (redraw) drawScreen();
+  if (screenAwake && settings.screenTimeoutSeconds != 0 &&
+      uint32_t(millis() - lastDisplayActivity) >= settings.screenTimeoutSeconds * 1000u) {
+    M5.Display.sleep();
+    screenAwake = false;
+  }
+  if (redraw && screenAwake) drawScreen();
   delay(5);
 }
