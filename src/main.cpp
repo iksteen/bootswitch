@@ -175,14 +175,44 @@ int32_t writeDisk(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t size)
 }
 
 bool startStopDisk(uint8_t, bool start, bool loadEject) {
-  if (loadEject && !start && ramDiskReady) {
+  if (loadEject && !start && ramDiskReady && !diskEjected.exchange(true)) {
     // Host has flushed its filesystem before issuing the eject command. Keep
     // parsing, NVS writes, and restart work out of the USB callback/task.
-    diskEjected.store(true);
     disk.mediaPresent(false);
     applyRequested.store(true);
   }
   return true;
+}
+
+bool rebuildConfigurationDisk() {
+  // Eject/apply has already made the medium unavailable and blocked writes.
+  // Re-enumerate afterward so hosts discard the old FAT/cache even when they
+  // did not poll TEST UNIT READY during this short removal interval.
+  // Let TinyUSB finish the eject response before removing the USB device.
+  delay(250);
+  if (usbReady) tud_disconnect();
+  const uint32_t disconnectedAt = millis();
+  Settings saved = settings;
+  bool valid = true;
+  if (storageReady && preferences.isKey("settings")) {
+    const String text = preferences.getString("settings");
+    valid = !bootswitch::parseSettings(text.c_str(), text.length(), saved);
+  }
+  size_t length = 0;
+  bool rebuilt = false;
+  if (valid && bootswitch::formatSettings(saved, configText, sizeof(configText), length)) {
+    xSemaphoreTake(diskMutex, portMAX_DELAY);
+    rebuilt = virtualDisk.format(configText, length);
+    xSemaphoreGive(diskMutex);
+  }
+  while (uint32_t(millis() - disconnectedAt) < 250) delay(1);
+  // Publish only a complete fresh disk. On recovery failure it stays ejected.
+  if (rebuilt) {
+    diskEjected.store(false);
+    disk.mediaPresent(true);
+  }
+  if (usbReady) tud_connect();
+  return rebuilt;
 }
 
 #if BOOTSWITCH_ENABLE_USB_UPDATE
@@ -244,6 +274,8 @@ void applyConfiguration() {
   if (!error) {
     restartAt = millis() + 500;
     restartPending = RestartAction::Application;
+  } else if (!rebuildConfigurationDisk()) {
+    problem = "USB disk recovery failed";
   }
 }
 

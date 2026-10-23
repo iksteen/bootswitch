@@ -82,9 +82,12 @@ The updater verifies the complete image and signed length before erasing or
 writing flash. It removes the signature trailer, writes only the application to
 the inactive slot, and selects that slot only after ESP-IDF validates the image.
 Unsigned production updates, invalid signatures, incomplete files, corrupt FAT chains, incompatible
-chips and invalid image checksums/digests are rejected. An error appears on the
-display; reset the Stick to restore the USB disk before trying again. The RAM
-disk is rebuilt at startup, so FIRMWARE.BIN is not reapplied on later ejects.
+chips and invalid image checksums/digests are rejected. The error stays on the
+display while the USB disk is rebuilt from the saved configuration and exposed
+again through a brief USB reconnect. The rejected firmware, temporary files and
+unsaved configuration edits are discarded. Copy a corrected update and eject to
+retry without resetting the Stick. The RAM disk is also rebuilt at startup, so
+FIRMWARE.BIN is not reapplied on later ejects.
 
 Use the signed update `.bin` for production, or a raw application `.bin` for
 development. ZIPs, EFI binaries and merged flash images are not USB updates.

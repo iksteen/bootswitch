@@ -114,6 +114,9 @@ USB writes are blocked after eject/apply while verification and staging run.
 Verification streams through a 4096-byte buffer and yields between chunks.
 Invalid production signatures are rejected before `esp_ota_begin` can erase
 the inactive slot. Interrupted writes leave the running slot selected.
+After a failed apply, the disk is rebuilt from saved settings while still
+unavailable, then re-exposed through USB reconnection. The error stays on screen;
+the rejected file and unsaved disk edits are removed before another upload.
 
 This authentication is enforced by the installed application. It does not change
 the bootloader or eFuses. ESP32-S3's hardware Secure Boot scheme uses RSA in
