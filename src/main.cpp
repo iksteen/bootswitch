@@ -425,7 +425,13 @@ void setup() {
   config.internal_rtc = false;
   config.internal_spk = false;
   config.internal_mic = false;
+  // No Grove/HAT accessories or IR: don't keep the external 5 V boost enabled.
+  config.output_power = false;
+  // A/B use direct GPIOs. The application never consumes the PMIC power key.
+  config.pmic_button = false;
   M5.begin(config);
+  // StickS3's status LED belongs to the PM1, not Power.setLed().
+  M5.Power.M5pm1.setLedEnLevel(false);
   M5.BtnB.setHoldThresh(1500);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);
@@ -482,5 +488,6 @@ void loop() {
   const bool telemetryChanged = pollDisplayTelemetry(millis());
   if (redraw && screenAwake) drawScreen();
   else if (telemetryChanged && screenAwake) drawDisplayTelemetry();
-  delay(5);
+  // Button/UI/network polling at 50 Hz; TinyUSB has its own event-driven task.
+  delay(20);
 }

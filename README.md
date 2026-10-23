@@ -37,6 +37,19 @@ that retains power without backfeeding the host. The built-in 250 mAh battery is
 only a temporary power source. Avoid ESP32 sleep modes: the selector needs USB and
 Wi-Fi running. Do not splice a second power supply into the USB cable.
 
+The CPU runs at **80 MHz**, retaining an
+80 MHz APB clock for USB and SPI. The application polls buttons/network at 50 Hz;
+TinyUSB runs independently in its own task. The unused external 5 V boost output
+is disabled, so Grove/HAT 5 V and the IR circuitry are not powered by the Stick.
+The unused PMIC power-key polling is disabled; front A and side B still work.
+Telemetry polling stops while the screen is off. ESP32 light/deep sleep is not
+used; USB remains connected. The firmware requests that the PM1 turn off the
+status LED.
+
+A battery-disconnected StickS3 measured a stable **0.132 W** with the display,
+Wi-Fi, BLE and status LED off. This measurement does not cover operation with
+either radio enabled.
+
 ## Build and flash the StickS3
 
 Install [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html)
