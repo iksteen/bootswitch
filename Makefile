@@ -14,6 +14,10 @@ test:
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_test
 	./build/ble_command_test
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -Iinclude src/display_telemetry.cpp tests/display_telemetry_test.cpp \
+	  -o build/display_telemetry_test
+	./build/display_telemetry_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Itests/usb_wake_stubs -Iinclude src/usb_wake.cpp tests/usb_wake_test.cpp \
 	  -o build/usb_wake_test
 	./build/usb_wake_test

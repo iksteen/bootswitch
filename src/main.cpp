@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "virtual_disk.h"
 #include "usb_wake.h"
+#include "display_telemetry.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
 #error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
@@ -57,11 +58,13 @@ uint32_t restartAt = 0;
 bool restartPending = false;
 bool screenAwake = true;
 uint32_t lastDisplayActivity = 0;
+bootswitch::DisplayTelemetry displayTelemetry;
 
 void wakeDisplay() {
   lastDisplayActivity = millis();
   if (!screenAwake) {
     screenAwake = true;
+    displayTelemetry.invalidate();
     M5.Display.wakeup();
     redraw = true;
   }
@@ -340,6 +343,21 @@ void startBluetooth() {
   if (error) problem = error;
 }
 
+bool pollDisplayTelemetry(uint32_t now) {
+  if (!displayTelemetry.pollDue(now, screenAwake)) return false;
+  const bool connected = networkEnabled && WiFi.status() == WL_CONNECTED;
+  return displayTelemetry.update(networkEnabled, connected,
+      connected ? WiFi.RSSI() : 0, M5.Power.getBatteryLevel());
+}
+
+void drawDisplayTelemetry() {
+  auto& display = M5.Display;
+  display.fillRect(80, 4, display.width() - 88, 12, TFT_BLACK);
+  display.setTextSize(1);
+  display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  display.drawRightString(displayTelemetry.text(), display.width() - 8, 5);
+}
+
 void drawScreen() {
   auto& display = M5.Display;
   display.fillScreen(TFT_BLACK);
@@ -367,6 +385,7 @@ void drawScreen() {
   else display.println("Wi-Fi: connecting...");
   display.setCursor(8, 116);
   display.println(bootswitch::bleActive() ? "BLE: on (PIN pairing)" : "BLE: off");
+  drawDisplayTelemetry();
   redraw = false;
 }
 }  // namespace
@@ -413,6 +432,7 @@ void setup() {
   startNetwork();
   startBluetooth();
   lastDisplayActivity = millis();
+  pollDisplayTelemetry(lastDisplayActivity);
   drawScreen();
 }
 
@@ -459,6 +479,8 @@ void loop() {
     M5.Display.sleep();
     screenAwake = false;
   }
+  const bool telemetryChanged = pollDisplayTelemetry(millis());
   if (redraw && screenAwake) drawScreen();
+  else if (telemetryChanged && screenAwake) drawDisplayTelemetry();
   delay(5);
 }

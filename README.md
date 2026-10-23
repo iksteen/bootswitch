@@ -140,6 +140,14 @@ only wakes the screen; press again to toggle. The first boot defaults to Linux.
 Each successful change is saved to NVS before it appears on USB or the display.
 A save error is shown instead of acknowledging an unsaved change.
 
+The top line also shows Wi-Fi signal strength in dBm and battery percentage.
+Both are sampled once per second while the display is on; sampling stops when
+it sleeps and resumes immediately when it wakes. These updates do not extend
+the screen timeout, and only the small status area is repainted when a value
+changes. Wi-Fi shows `off` when disabled and `--` while disconnected; unsupported
+battery readings show `--`. Battery percentage is M5Unified's voltage-based
+estimate; a physically disconnected battery may not be reliably detected.
+
 The display sleeps after `screen_timeout` seconds (**60 by default**) without a
 button press, a web/API or BLE mode command, or a USB reset/resume event. Set
 `screen_timeout=0` in CONFIG.INI to keep it always on. Only the display sleeps: USB storage and
