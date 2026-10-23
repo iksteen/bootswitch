@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>
+#include <esp_wifi.h>
 #include <atomic>
 #include <cstring>
 #include <freertos/semphr.h>
@@ -218,7 +219,8 @@ document.querySelectorAll('button').forEach(b=>b.onclick=async()=>{
   }catch(e){status.textContent=e.message;}
   finally{document.querySelectorAll('button').forEach(x=>x.disabled=false);}
 });
-refresh();setInterval(refresh,3000);
+refresh();setInterval(()=>{if(!document.hidden)refresh();},3000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 </script></html>)HTML";
 
 bool authenticate() {
@@ -266,11 +268,27 @@ void startNetwork() {
     WiFi.mode(WIFI_OFF);
     return;
   }
-  WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
   WiFi.setHostname(settings.hostname);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(settings.ssid, settings.password);
+  // Install credentials without connecting: the listen interval must be set
+  // before association, and begin(ssid, password) would overwrite it.
+  WiFi.begin(settings.ssid, settings.password, 0, nullptr, false);
+  if (settings.wifiListenInterval != 0) {
+    wifi_config_t config{};
+    bool configured = esp_wifi_get_config(WIFI_IF_STA, &config) == ESP_OK;
+    if (configured) {
+      config.sta.listen_interval = settings.wifiListenInterval;
+      configured = esp_wifi_set_config(WIFI_IF_STA, &config) == ESP_OK;
+    }
+    if (!configured || !WiFi.setSleep(WIFI_PS_MAX_MODEM)) {
+      // Keep remote control available using the normal DTIM-based sleep mode.
+      WiFi.setSleep(WIFI_PS_MIN_MODEM);
+      problem = "Wi-Fi sleep setup failed";
+    }
+  }
+  WiFi.begin();
   lastRetry = millis();
   // Wi-Fi can connect without exposing any HTTP listener when no key is set.
   if (!apiEnabled) return;

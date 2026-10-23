@@ -99,6 +99,7 @@ api_key=
 hostname=bootswitch
 ble_passkey=
 screen_timeout=60
+wifi_listen_interval=0
 ```
 
 Save and close the file, then **safely eject** the USB drive. The StickS3 validates
@@ -139,6 +140,15 @@ saved CONFIG.INI, then edit it again.
   and the API key. Use your own PIN; it is readable on this USB disk too.
 - `screen_timeout`: seconds before the display sleeps. Defaults to `60` when
   omitted; `0` keeps it always on. Accepts whole numbers from 0 to 4294967.
+- `wifi_listen_interval`: defaults to `0`, which uses modem sleep following the
+  access point's DTIM interval. Values `1` through `10` select maximum modem sleep
+  and specify how many AP beacon intervals to wait between receives. With a
+  typical 102.4 ms beacon interval, `10` is approximately one second. Longer
+  intervals than the AP's DTIM period can save idle power but add receive latency
+  and may miss broadcast or multicast traffic, including `.local` discovery. Use
+  a reserved IP address if discovery is unreliable, or return to `0`. Actual
+  timing and savings depend on the AP and network traffic. See
+  [Espressif's modem-sleep documentation](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-guides/wifi.html#station-sleep).
 - CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its boot
   files. Other files and editor backups exist only in RAM and disappear on restart.
 

@@ -23,7 +23,8 @@ bool sameSettings(const Settings& a, const Settings& b) {
          std::strcmp(a.apiKey, b.apiKey) == 0 &&
          std::strcmp(a.hostname, b.hostname) == 0 &&
          std::strcmp(a.blePasskey, b.blePasskey) == 0 &&
-         a.screenTimeoutSeconds == b.screenTimeoutSeconds;
+         a.screenTimeoutSeconds == b.screenTimeoutSeconds &&
+         a.wifiListenInterval == b.wifiListenInterval;
 }
 
 void parserTests() {
@@ -55,6 +56,10 @@ void parserTests() {
                               "4294967296", "99999999999999999999999"})
     rejects(valid + "screen_timeout=" + invalid + "\n");
   rejects(valid + "screen_timeout=0\nscreen_timeout=60\n");
+  for (const char* invalid : {"", "-1", "+1", "1.5", " 10", "10 ", "11", "65535",
+                              "4294967296", "99999999999999999999999"})
+    rejects(valid + "wifi_listen_interval=" + invalid + "\n");
+  rejects(valid + "wifi_listen_interval=0\nwifi_listen_interval=10\n");
   rejects("wifi_ssid=" + std::string(33, 'x') + "\nwifi_password=\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=short\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=\napi_key=short\nhostname=test\n");
@@ -84,6 +89,7 @@ void parserTests() {
   assert(std::strcmp(empty.hostname, "bootswitch") == 0);
   assert(!validateSettings(empty));
   assert(empty.screenTimeoutSeconds == 60);
+  assert(empty.wifiListenInterval == 0);
   assert(!parseSettings("", 0, roundtrip));
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
   assert(!parseSettings("# No credentials\n", 17, roundtrip));
@@ -105,6 +111,23 @@ void parserTests() {
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
   assert(!roundtrip.bleEnabled());
   assert(roundtrip.screenTimeoutSeconds == 60);
+  assert(roundtrip.wifiListenInterval == 0);
+  // Existing saved files keep DTIM-based sleep; opt-in intervals survive saves.
+  for (uint32_t interval = 0; interval <= Settings::kMaxWifiListenInterval; ++interval) {
+    const std::string text = valid + "wifi_listen_interval=" + std::to_string(interval) + "\n";
+    assert(!parseSettings(text.data(), text.size(), roundtrip));
+    assert(roundtrip.wifiListenInterval == interval);
+    assert(formatSettings(roundtrip, serialized, sizeof(serialized), length));
+    Settings restored;
+    assert(!parseSettings(serialized, length, restored));
+    assert(sameSettings(roundtrip, restored));
+  }
+  assert(!parseSettings(valid.data(), valid.size(), roundtrip));
+  assert(roundtrip.wifiListenInterval == 0);
+  Settings invalidInterval;
+  invalidInterval.wifiListenInterval = Settings::kMaxWifiListenInterval + 1;
+  assert(validateSettings(invalidInterval));
+  assert(!formatSettings(invalidInterval, serialized, sizeof(serialized), length));
   for (const uint32_t seconds : {0u, 1u, 120u, Settings::kMaxScreenTimeoutSeconds}) {
     const std::string text = valid + "screen_timeout=" + std::to_string(seconds) + "\n";
     assert(!parseSettings(text.data(), text.size(), roundtrip));

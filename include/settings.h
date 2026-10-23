@@ -7,12 +7,15 @@ namespace bootswitch {
 struct Settings {
   // The millisecond timeout must fit in the unsigned millis() counter.
   static constexpr uint32_t kMaxScreenTimeoutSeconds = UINT32_MAX / 1000u;
+  static constexpr uint32_t kMaxWifiListenInterval = 10;
   char ssid[33] = {};
   char password[65] = {};
   char apiKey[97] = {};
   char hostname[64] = "bootswitch";
   char blePasskey[7] = {};
   uint32_t screenTimeoutSeconds = 60;
+  // 0 follows the AP's DTIM; positive values use maximum modem sleep.
+  uint32_t wifiListenInterval = 0;
 
   bool wifiEnabled() const { return ssid[0] != 0; }
   bool apiEnabled() const { return apiKey[0] != 0; }

@@ -151,7 +151,7 @@ def main():
             replace_and_eject("")
             assert remount() == {"wifi_ssid": "", "wifi_password": "", "api_key": "",
                                  "hostname": "bootswitch", "ble_passkey": "",
-                                 "screen_timeout": "60"}
+                                 "screen_timeout": "60", "wifi_listen_interval": "0"}
             verify_http_off()
             print("Empty CONFIG.INI: no Wi-Fi credentials or API key invented; both services off.", flush=True)
     finally:

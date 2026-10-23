@@ -22,24 +22,26 @@ bool hexKey(const char* value) {
   return true;
 }
 
-const char* screenTimeout(const char* value, uint32_t& seconds) {
-  if (!*value) return "Screen timeout: seconds";
+bool unsignedSetting(const char* value, uint32_t maximum, uint32_t& output) {
+  if (!*value) return false;
   uint32_t parsed = 0;
   for (; *value; ++value) {
-    if (*value < '0' || *value > '9') return "Screen timeout: seconds";
+    if (*value < '0' || *value > '9') return false;
     const uint32_t digit = *value - '0';
-    if (parsed > (Settings::kMaxScreenTimeoutSeconds - digit) / 10u)
-      return "Screen timeout out of range";
+    if (parsed > maximum / 10u ||
+        (parsed == maximum / 10u && digit > maximum % 10u)) return false;
     parsed = parsed * 10u + digit;
   }
-  seconds = parsed;
-  return nullptr;
+  output = parsed;
+  return true;
 }
 }  // namespace
 
 const char* validateSettings(const Settings& s) {
   if (s.screenTimeoutSeconds > Settings::kMaxScreenTimeoutSeconds)
     return "Screen timeout out of range";
+  if (s.wifiListenInterval > Settings::kMaxWifiListenInterval)
+    return "Wi-Fi listen interval: 0-10";
   // Arrays must be terminated even when loading untrusted settings.
   if (!std::memchr(s.ssid, 0, sizeof(s.ssid)) ||
       !std::memchr(s.password, 0, sizeof(s.password)) ||
@@ -75,6 +77,7 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
   if (!text || std::memchr(text, 0, length)) return "Invalid config text";
   Settings candidate;
   char timeoutText[11] = {};
+  char listenIntervalText[11] = {};
   unsigned seen = 0;
   size_t position = 0;
   // UTF-8 BOM from Windows text editors is allowed.
@@ -104,6 +107,7 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
       {"hostname", candidate.hostname, sizeof(candidate.hostname), 8},
       {"ble_passkey", candidate.blePasskey, sizeof(candidate.blePasskey), 16},
       {"screen_timeout", timeoutText, sizeof(timeoutText), 32},
+      {"wifi_listen_interval", listenIntervalText, sizeof(listenIntervalText), 64},
     };
     for (const auto& field : fields) {
       if (std::strlen(field.name) == keyEnd - keyStart &&
@@ -122,10 +126,12 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
     std::memcpy(destination, text + equals + 1, valueLength);
     destination[valueLength] = 0;
   }
-  if (seen & 32) {
-    if (const char* error = screenTimeout(timeoutText, candidate.screenTimeoutSeconds))
-      return error;
-  }
+  if ((seen & 32) && !unsignedSetting(timeoutText, Settings::kMaxScreenTimeoutSeconds,
+                                    candidate.screenTimeoutSeconds))
+    return "Screen timeout out of range";
+  if ((seen & 64) && !unsignedSetting(listenIntervalText, Settings::kMaxWifiListenInterval,
+                                    candidate.wifiListenInterval))
+    return "Wi-Fi listen interval: 0-10";
   // Omitted fields use defaults. In particular, removing an
   // API key must never preserve old credentials or enable anonymous access.
   if (const char* error = validateSettings(candidate)) return error;
@@ -142,8 +148,11 @@ bool formatSettings(const Settings& s, char* output, size_t capacity, size_t& le
       "wifi_ssid=%s\r\nwifi_password=%s\r\napi_key=%s\r\nhostname=%s\r\n"
       "ble_passkey=%s\r\n"
       "# Screen timeout in seconds; 0 keeps the display on.\r\n"
-      "screen_timeout=%" PRIu32 "\r\n",
-      s.ssid, s.password, s.apiKey, s.hostname, s.blePasskey, s.screenTimeoutSeconds);
+      "screen_timeout=%" PRIu32 "\r\n"
+      "# Wi-Fi receive interval: 0 follows AP DTIM; 1-10 counts beacon intervals.\r\n"
+      "wifi_listen_interval=%" PRIu32 "\r\n",
+      s.ssid, s.password, s.apiKey, s.hostname, s.blePasskey, s.screenTimeoutSeconds,
+      s.wifiListenInterval);
   if (written < 0 || static_cast<size_t>(written) >= capacity) return false;
   length = static_cast<size_t>(written);
   return true;
