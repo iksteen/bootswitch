@@ -82,6 +82,9 @@ with Wi-Fi off. Control requires PIN-authenticated, encrypted pairing; phones
 can retain their bond across device reboots. Changing the PIN clears the device's
 old bonds on startup; also forget/unpair it on your phone before pairing again.
 
+Advertising uses a 500–750 ms interval. Bluetooth controller modem sleep reduces
+idle power between radio events; USB remains available.
+
 In [BLESPloit's GATT browser](https://blesplo.it/docs/mobile/connections/):
 
 1. Scan for `bootswitch` (or your hostname), then use the **link/manual connection**

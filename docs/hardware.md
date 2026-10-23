@@ -39,6 +39,13 @@ connected and available to power the Stick when USB power is removed. See
 Wi-Fi [modem sleep](configuration.md#wi-fi-power-saving) is configured separately
 and does not disconnect USB.
 
+Bluetooth controller modem sleep uses the main crystal, independently of ESP32
+CPU sleep. The pinned Arduino SDK disables it in the default controller
+configuration; BootSwitch adapts the public initialization parameters through
+the linker wrapper in [ble_power.cpp](../src/ble_power.cpp). A compile-time guard
+requires review when changing ESP-IDF or the target. See
+[Espressif's Bluetooth sleep configuration](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/kconfig.html#config-bt-ctrl-modem-sleep).
+
 A battery-disconnected StickS3 measured a stable **0.132 W** with the display,
 Wi-Fi, BLE and status LED off. This measurement does not cover operation with
 either radio enabled.

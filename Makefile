@@ -24,6 +24,10 @@ test:
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_dev_test
 	./build/ble_command_dev_test
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -Itests/ble_power_stubs -Iinclude src/ble_power.cpp tests/ble_power_test.cpp \
+	  -o build/ble_power_test
+	./build/ble_power_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Iinclude src/display_telemetry.cpp tests/display_telemetry_test.cpp \
 	  -o build/display_telemetry_test
 	./build/display_telemetry_test

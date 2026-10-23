@@ -105,6 +105,9 @@ BLE command tests cover remote flash both enabled and disabled. Firmware feature
 checks inspect both binaries and verify that the production package excludes
 remote download entry, the firmware file parser, and OTA write/activation code.
 
+Bluetooth power-adapter tests check initialization defaults, preservation of
+explicit caller settings, and propagation of controller errors.
+
 The EFI integration test boots the **real systemd-boot** in QEMU/OVMF, with the
 generated disk attached as USB mass storage. Test payloads report the selected
 entry and confirm one-shot consumption. Cases cover Linux, Windows, missing and

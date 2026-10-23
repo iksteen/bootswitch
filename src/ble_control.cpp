@@ -100,6 +100,10 @@ const char* startBle(const Settings& settings, Mode mode, bool forgetBonds) {
       !advertising->setScanResponseData(scan) || !advertising->addServiceUUID(kService))
     return fail("BLE advertising failed");
   advertising->enableScanResponse(true);
+  // Boot selection is infrequent: stay discoverable without advertising at
+  // NimBLE's much faster default interval (units are 0.625 ms).
+  advertising->setMinInterval(800);   // 500 ms
+  advertising->setMaxInterval(1200);  // 750 ms
   if (!advertising->start()) return fail("BLE advertising failed");
   active = true;
   return nullptr;
