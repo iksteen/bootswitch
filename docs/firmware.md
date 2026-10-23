@@ -15,6 +15,10 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/iksteen/boo
 | `bootswitch-sticks3-dev.bin` | Development application image only. |
 | `SHA256SUMS` | SHA-256 hashes of all five release downloads. |
 
+The development build disables battery charging for power measurements with the
+battery connected. Production firmware enables charging at startup; see
+[build flags](development.md#development-feature-flags).
+
 Both flash ZIPs contain the bootloader, partition table, application, flash
 arguments, instructions, build feature flags, and checksums. Application-only
 images can be flashed at `0x10000` with the matching bootloader and partition

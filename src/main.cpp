@@ -65,6 +65,8 @@ enum class RestartAction { None, Application
 };
 RestartAction restartPending = RestartAction::None;
 bool screenAwake = true;
+// Confirmed at startup; -1 means the PM1 charge state could not be configured.
+int8_t batteryChargingEnabled = -1;
 uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
@@ -523,6 +525,15 @@ void setup() {
   M5.begin(config);
   // StickS3's status LED belongs to the PM1, not Power.setLed().
   M5.Power.M5pm1.setLedEnLevel(false);
+  // PM1 retains CHG_EN across ESP resets. Explicitly apply both policies so
+  // switching from a measurement build to production restores charging.
+  constexpr bool wantCharging = !BOOTSWITCH_DISABLE_BATTERY_CHARGING;
+  bool actualCharging = false;
+  if (M5.Power.M5pm1.isEnabled() &&
+      M5.Power.M5pm1.setBatteryCharge(wantCharging) &&
+      M5.Power.M5pm1.getBatteryCharge(&actualCharging) && actualCharging == wantCharging) {
+    batteryChargingEnabled = actualCharging ? 1 : 0;
+  } else problem = "Battery charge setup failed";
   M5.BtnB.setHoldThresh(1500);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);

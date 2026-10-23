@@ -26,16 +26,18 @@ Use `--environment sticks3-dev` for the development build.
 ## Development feature flags
 
 The default **sticks3** build and production release firmware disable remote
-download-mode entry and USB-disk firmware updates. Both are compile-time options,
-independent of each other, and cannot be enabled through CONFIG.INI:
+download-mode entry and USB-disk firmware updates, and enable battery charging.
+These compile-time options are independent and cannot be changed through CONFIG.INI:
 
-| Build flag | Default | Enables |
+| Build flag | Default | Effect when `1` |
 | --- | --- | --- |
 | `BOOTSWITCH_ENABLE_REMOTE_FLASH` | `0` | API `mode=flash` and BLE `flash` |
 | `BOOTSWITCH_ENABLE_USB_UPDATE` | `0` | Installing FIRMWARE.BIN on eject/apply |
+| `BOOTSWITCH_DISABLE_BATTERY_CHARGING` | `0` | Disable battery charging for power measurements |
 
-Set a flag to `1` in a custom PlatformIO environment's `build_flags` to enable
-that feature. The **sticks3-dev** environment enables both:
+Set a flag to `1` in a custom PlatformIO environment's `build_flags` to apply
+its listed behavior. The **sticks3-dev** environment sets all three to `1`,
+including disabling battery charging:
 
 ```sh
 pio run --environment sticks3-dev
@@ -47,6 +49,10 @@ files are named `bootswitch-sticks3-dev.bin` / `bootswitch-sticks3-dev-flash.zip
 under `build/release/sticks3-dev/`, separate from production artifacts. Each ZIP
 includes BUILD_INFO.txt with its feature flags. CI checks and publishes both
 variants under their distinct filenames.
+
+Each build explicitly applies its charging policy at startup and reads it back
+from the PM1. Installing production firmware after a measurement build restores
+charging.
 
 With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
 400 and BLE `flash` is ignored. With USB updates disabled, FIRMWARE.BIN is an

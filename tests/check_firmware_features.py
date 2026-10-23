@@ -26,7 +26,11 @@ for environment, enabled in (("sticks3", False), ("sticks3-dev", True)):
     with zipfile.ZipFile(output / f"{stem}-flash.zip") as bundle:
         info = dict(line.split("=", 1) for line in bundle.read("BUILD_INFO.txt").decode().splitlines())
         assert info == {"environment": environment, "BOOTSWITCH_ENABLE_REMOTE_FLASH": str(int(enabled)),
-                        "BOOTSWITCH_ENABLE_USB_UPDATE": str(int(enabled))}
+                        "BOOTSWITCH_ENABLE_USB_UPDATE": str(int(enabled)),
+                        "BOOTSWITCH_DISABLE_BATTERY_CHARGING": str(int(enabled))}
+        charge_message = (b"Battery charging is disabled at startup" if enabled else
+                          b"Battery charging is enabled at startup")
+        assert charge_message in bundle.read("README.txt")
         assert bundle.read("firmware.bin") == image
         assert (output / f"{stem}.bin").read_bytes() == image
         for line in bundle.read("SHA256SUMS").decode().splitlines():

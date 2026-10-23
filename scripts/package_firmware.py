@@ -17,7 +17,8 @@ def package_firmware(source, target, env):
         output /= environment
     stem = "bootswitch-" + environment
     output.mkdir(parents=True, exist_ok=True)
-    features = {"BOOTSWITCH_ENABLE_REMOTE_FLASH": 0, "BOOTSWITCH_ENABLE_USB_UPDATE": 0}
+    features = {"BOOTSWITCH_ENABLE_REMOTE_FLASH": 0, "BOOTSWITCH_ENABLE_USB_UPDATE": 0,
+                "BOOTSWITCH_DISABLE_BATTERY_CHARGING": 0}
     for definition in env.get("CPPDEFINES", []):
         if isinstance(definition, (tuple, list)) and definition[0] in features:
             features[definition[0]] = int(str(definition[1]), 0)
@@ -54,6 +55,10 @@ def package_firmware(source, target, env):
         'This preserves settings and does not update the bootloader/partition map.\n'
         if features["BOOTSWITCH_ENABLE_USB_UPDATE"] else
         'USB-disk firmware updates are disabled. FIRMWARE.BIN is ignored.\n')
+    charge_instructions = (
+        'Battery charging is disabled at startup for power measurements.\n'
+        if features["BOOTSWITCH_DISABLE_BATTERY_CHARGING"] else
+        'Battery charging is enabled at startup.\n')
     contents["README.txt"] = f"""BootSwitch firmware for M5Stack StickS3 (8 MiB flash / 8 MiB PSRAM)
 
 Build environment: {environment}. Feature flags are listed in BUILD_INFO.txt.
@@ -80,6 +85,7 @@ installation. Never flash the application image at address zero.
 
 {remote_instructions}
 {usb_instructions}
+{charge_instructions}
 
 SHA256SUMS contains hashes of the supplied images and instructions.
 """.encode()

@@ -30,6 +30,12 @@ Telemetry polling stops while the screen is off. ESP32 light/deep sleep is not
 used; USB remains connected. The firmware requests that the PM1 turn off the
 status LED.
 
+Production firmware enables battery charging at startup. The development build
+sets `BOOTSWITCH_DISABLE_BATTERY_CHARGING=1` to exclude charging current from
+power measurements on units with an intact battery. The battery remains
+connected and available to power the Stick when USB power is removed. See
+[build flags](development.md#development-feature-flags) for custom builds.
+
 Wi-Fi [modem sleep](configuration.md#wi-fi-power-saving) is configured separately
 and does not disconnect USB.
 
