@@ -222,7 +222,7 @@ void applyConfiguration() {
   if (!error && firmware) {
     problem = "Validating firmware";
     drawScreen();
-    error = bootswitch::stageFirmware(firmware, staged, firmwareProgress);
+    error = bootswitch::stageFirmware(firmware, staged, firmwareProgress, [] { delay(1); });
   }
 #endif
   if (!error) {

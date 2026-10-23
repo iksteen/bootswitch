@@ -1,6 +1,11 @@
 .PHONY: test firmware efi
+# Arch installs mbedTLS 2 alongside newer ABIs; Ubuntu uses the normal prefix.
+MBEDTLS_CFLAGS ?= $(if $(wildcard /usr/include/mbedtls2/mbedtls/pk.h),-I/usr/include/mbedtls2)
+MBEDTLS_LIBS ?= $(if $(wildcard /usr/lib/mbedtls2/libmbedcrypto.so),-L/usr/lib/mbedtls2) -lmbedcrypto
+PYTHON ?= python3
 test:
 	mkdir -p build
+	$(PYTHON) tests/check_firmware_signing.py --fixtures build/signing-tests
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Iinclude src/boot_disk.cpp tests/boot_disk_test.cpp -o build/boot_disk_test
 	./build/boot_disk_test build
@@ -12,9 +17,18 @@ test:
 	python3 tests/check_config_fat.py
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
-	  -Itests/firmware_update_stubs -Iinclude src/boot_disk.cpp src/virtual_disk.cpp \
-	  src/firmware_update.cpp tests/firmware_update_test.cpp -o build/firmware_update_test
+	  -DBOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE=1 \
+	  $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
+	  src/boot_disk.cpp src/virtual_disk.cpp src/firmware_update.cpp \
+	  tests/firmware_update_test.cpp $(MBEDTLS_LIBS) -o build/firmware_update_test
 	./build/firmware_update_test build
+	./build/firmware_update_test --signed-tests build/signing-tests
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
+	  $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
+	  src/boot_disk.cpp src/virtual_disk.cpp src/firmware_update.cpp \
+	  tests/firmware_update_test.cpp $(MBEDTLS_LIBS) -o build/firmware_update_signed_test
+	./build/firmware_update_signed_test --signed-tests build/signing-tests
 	python3 tests/check_firmware_fat.py
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_test

@@ -9,11 +9,12 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/iksteen/boo
 | Asset | Purpose |
 | --- | --- |
 | `bootswitchx64.efi` | x86-64 EFI bridge; see [PC boot setup](boot-setup.md). |
-| `bootswitch-sticks3-flash.zip` | Complete production installation package; remote flash and USB firmware updates disabled. |
+| `bootswitch-sticks3-flash.zip` | Complete production installation package; signed USB updates enabled, remote download mode disabled. |
 | `bootswitch-sticks3.bin` | Production application image only. |
+| `FIRMWARE.BIN` | Signed production USB update; copy directly to BOOTSWITCH. |
 | `bootswitch-sticks3-dev-flash.zip` | Complete development installation package; remote flash and USB firmware updates enabled. |
 | `bootswitch-sticks3-dev.bin` | Development application image only. |
-| `SHA256SUMS` | SHA-256 hashes of all five release downloads. |
+| `SHA256SUMS` | SHA-256 hashes of all six release downloads. |
 
 The development build disables battery charging for power measurements with the
 battery connected. Production firmware enables charging at startup; see
@@ -22,8 +23,8 @@ battery connected. Production firmware enables charging at startup; see
 Both flash ZIPs contain the bootloader, partition table, application, flash
 arguments, instructions, build feature flags, and checksums. Application-only
 images can be flashed at `0x10000` with the matching bootloader and partition
-table installed, or installed through the USB disk when the running firmware
-enables that feature.
+table installed. USB updates use the signed `FIRMWARE.BIN` asset in production;
+development firmware also accepts raw application images.
 
 To install the firmware, extract the flash ZIP and open a terminal in its
 directory. Install `esptool==4.9.0` in a Python environment, put the StickS3 in
@@ -56,36 +57,48 @@ is separate from the front A boot-selection button.
 
 ## USB-disk updates
 
-Requires `BOOTSWITCH_ENABLE_USB_UPDATE=1` in the **running** firmware; see
-[development feature flags](development.md#development-feature-flags). Copy the
-raw application binary (`bootswitch-sticks3.bin` from a release, or
-`.pio/build/sticks3/firmware.bin` from a local build) to the root of **BOOTSWITCH**
-as **FIRMWARE.BIN**, then safely eject the drive:
+Both standard builds enable USB updates. Production firmware requires a valid
+signature from the BootSwitch ECDSA P-256 key embedded in the running application.
+Download **FIRMWARE.BIN**, copy it to the root of **BOOTSWITCH**, then safely eject:
 
 ```sh
-cp bootswitch-sticks3.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
+cp FIRMWARE.BIN "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
 gio mount --eject "/run/media/$USER/BOOTSWITCH"
 ```
 
-On Windows, copy and rename the file, then use **Safely Remove Hardware/Eject**.
+On Windows, copy FIRMWARE.BIN to BOOTSWITCH, then use **Safely Remove Hardware/Eject**.
 The display shows update progress, and the Stick restarts after validation and
 activation. The saved OS selection and settings are retained. Valid CONFIG.INI
 edits can be applied in the same eject operation. As with settings-only saves,
 flushing/unmounting and holding B for 1.5 seconds also applies the file.
 
-The updater writes the inactive application slot and selects it only after
-ESP-IDF validates the image. Incomplete files, corrupt FAT chains, incompatible
+Development firmware also accepts unsigned raw application images, such as
+`bootswitch-sticks3-dev.bin` or `.pio/build/sticks3-dev/firmware.bin`. Recognized
+signed images must have a valid signature in either build. A development image
+requires physical download mode to install from production unless explicitly
+signed by the trusted key holder.
+
+The updater verifies the complete image and signed length before erasing or
+writing flash. It removes the signature trailer, writes only the application to
+the inactive slot, and selects that slot only after ESP-IDF validates the image.
+Unsigned production updates, invalid signatures, incomplete files, corrupt FAT chains, incompatible
 chips and invalid image checksums/digests are rejected. An error appears on the
 display; reset the Stick to restore the USB disk before trying again. The RAM
 disk is rebuilt at startup, so FIRMWARE.BIN is not reapplied on later ejects.
 
-Use the application `.bin`, rather than the ZIP, EFI binary or a merged flash
-image. USB-disk updates do not replace the bootloader or partition table; use
+Use the signed update `.bin` for production, or a raw application `.bin` for
+development. ZIPs, EFI binaries and merged flash images are not USB updates.
+USB-disk updates do not replace the bootloader or partition table; use
 the complete flash package when those need updating. Image validation does not
 test the new application's behavior; the physical reset/power button remains
-available for recovery through the ROM download mode. Anyone with write access
-to this USB disk can install firmware while this development feature is enabled.
-Installing the default production image disables subsequent USB-disk updates.
+available for recovery through ROM download mode. This is application-level
+update authentication; hardware Secure Boot and eFuse changes are not enabled.
+Physical download mode can still install arbitrary firmware. Previously signed
+images remain acceptable: there is no anti-rollback counter. Anyone with write
+access to a development unit's USB disk can install unsigned firmware.
+
+Older production firmware that disables USB updates needs one physical flash
+to install firmware supporting signed updates. See [signing your own builds](signing.md).
 
 ## Enter download mode remotely
 

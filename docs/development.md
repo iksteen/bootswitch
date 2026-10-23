@@ -25,18 +25,20 @@ Use `--environment sticks3-dev` for the development build.
 
 ## Development feature flags
 
-The default **sticks3** build and production release firmware disable remote
-download-mode entry and USB-disk firmware updates, and enable battery charging.
+The default **sticks3** build enables signed USB updates and battery charging,
+and disables remote download-mode entry. Development builds accept unsigned
+USB updates as well.
 These compile-time options are independent and cannot be changed through CONFIG.INI:
 
 | Build flag | Default | Effect when `1` |
 | --- | --- | --- |
 | `BOOTSWITCH_ENABLE_REMOTE_FLASH` | `0` | API `mode=flash` and BLE `flash` |
-| `BOOTSWITCH_ENABLE_USB_UPDATE` | `0` | Installing FIRMWARE.BIN on eject/apply |
+| `BOOTSWITCH_ENABLE_USB_UPDATE` | `1` | Installing FIRMWARE.BIN on eject/apply |
+| `BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE` | `0` | Accept raw unsigned USB updates as well as valid signed updates |
 | `BOOTSWITCH_DISABLE_BATTERY_CHARGING` | `0` | Disable battery charging for power measurements |
 
 Set a flag to `1` in a custom PlatformIO environment's `build_flags` to apply
-its listed behavior. The **sticks3-dev** environment sets all three to `1`,
+its listed behavior. The **sticks3-dev** environment sets all four to `1`,
 including disabling battery charging:
 
 ```sh
@@ -74,8 +76,11 @@ development firmware artifacts, retained for 30 days.
 Pushing a version tag such as `v0.1.0` runs those same builds and tests, then
 publishes a GitHub Release with the EFI binary, both firmware variants and their
 flash ZIPs and checksums. Tags containing a hyphen, such as `v0.1.0-rc.1`,
-produce prereleases. Publishing uses the repository's automatic `GITHUB_TOKEN`;
-no additional secrets are needed.
+produce prereleases. Publishing uses the repository's automatic `GITHUB_TOKEN`.
+The publish job uses the protected **firmware-signing** environment and waits for
+its required approval. It requires that environment's **FIRMWARE_SIGNING_KEY**
+secret and adds `FIRMWARE.BIN`, signed against the committed public key. Branch
+and PR builds never receive the key. See [firmware signing](signing.md).
 Only the publish job has release write permission. All action dependencies are
 pinned to commit SHAs, with weekly Dependabot checks for updates. See the
 [build](../.github/workflows/build.yml) and
@@ -84,7 +89,8 @@ pinned to commit SHAs, with weekly Dependabot checks for updates. See the
 ## Verification
 
 ```sh
-# C++ compiler, Python 3, dosfstools, mtools:
+# C++ compiler, Python 3, mbedTLS 2.x headers/library, dosfstools, mtools:
+python -m pip install -r requirements-signing.txt
 make test
 # GNU-EFI, QEMU, OVMF, installed systemd-boot EFI binary:
 python3 tests/check_efi.py
@@ -103,8 +109,11 @@ ptrace-based sandbox, use
 `ASAN_OPTIONS=detect_leaks=0 make test` (LeakSanitizer cannot run under ptrace).
 
 BLE command tests cover remote flash both enabled and disabled. Firmware feature
-checks inspect both binaries and verify that the production package excludes
-remote download entry, the firmware file parser, and OTA write/activation code.
+checks verify that both binaries contain the USB updater and public key, that
+production requires signatures, and that only development enables remote flash.
+Signing tests use disposable keys and real mbedTLS verification in both policies,
+covering wrong keys, unsigned images, altered content/metadata/signatures,
+truncation, extra bytes, fragmented FAT files and signature-trailer stripping.
 Bluetooth power-adapter tests check initialization defaults, preservation of
 explicit caller settings, and propagation of controller errors. The live HTTP
 checks also verify authenticated power diagnostics and the CPU/APB clocks.

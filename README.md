@@ -28,8 +28,8 @@ USB data disk; the PC's internal boot manager starts the selected OS.
 ## Quick start
 
 1. [Install the firmware](docs/firmware.md) from a [GitHub Release](https://github.com/iksteen/bootswitch/releases).
-   Use the production flash ZIP for normal use; development images enable
-   remote download mode and USB-disk firmware updates.
+   Use the production flash ZIP for normal use; it accepts signed USB updates.
+   Development images also accept unsigned updates and enable remote download mode.
 2. Optionally [edit CONFIG.INI](docs/configuration.md) on the **BOOTSWITCH** USB
    drive to enable Wi-Fi, the API or BLE. Save and **safely eject** to apply.
    All three are disabled until configured; the button works without them.
@@ -42,6 +42,7 @@ USB data disk; the PC's internal boot manager starts the selected OS.
 | Topic | Guide |
 | --- | --- |
 | Firmware downloads, installation and updates | [Firmware](docs/firmware.md) |
+| Signing keys and authenticated USB updates | [Firmware signing](docs/signing.md) |
 | Wi-Fi credentials, API key, BLE PIN and display timeout | [Configuration](docs/configuration.md) |
 | Buttons, display, HTTP API and Bluetooth commands | [Controls](docs/controls.md) |
 | EFI bridge, Secure Boot, GRUB and removing the integration | [PC boot setup](docs/boot-setup.md) |

@@ -19,10 +19,19 @@ jobs:
     name: Publish EFI and firmware
     needs: build
     runs-on: ubuntu-24.04
+    environment: firmware-signing
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install signing dependencies
+        run: python -m pip install -r requirements-signing.txt
       - name: Download EFI binary
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -38,6 +47,24 @@ jobs:
         with:
           name: bootswitch-firmware-sticks3-dev
           path: dist
+      # Environment protection gates this job before its signing key is released.
+      # The key is passed only to this step, after all tests, on a version tag.
+      # Branch/PR builds and development images never receive this secret.
+      - name: Sign production USB update
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          if [[ -z "$FIRMWARE_SIGNING_KEY" ]]; then
+            echo 'FIRMWARE_SIGNING_KEY is required in the firmware-signing environment.' >&2
+            exit 1
+          fi
+          umask 077
+          key_file="$(mktemp "$RUNNER_TEMP/bootswitch-signing.XXXXXX")"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$FIRMWARE_SIGNING_KEY" > "$key_file"
+          python scripts/firmware_signing.py sign dist/bootswitch-sticks3.bin \
+            --private-key "$key_file" --output dist/FIRMWARE.BIN
+          python scripts/firmware_signing.py verify dist/FIRMWARE.BIN
       - name: Checksums and release assets
         working-directory: dist
         env:
@@ -48,6 +75,7 @@ jobs:
           assets=(
             bootswitchx64.efi
             bootswitch-sticks3.bin bootswitch-sticks3-flash.zip
+            FIRMWARE.BIN
             bootswitch-sticks3-dev.bin bootswitch-sticks3-dev-flash.zip
           )
           sha256sum "${assets[@]}" > SHA256SUMS

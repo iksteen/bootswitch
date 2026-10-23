@@ -6,3 +6,4 @@ build/
 efi/build/
 __pycache__/
 .aws/
+.signing/

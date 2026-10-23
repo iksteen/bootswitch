@@ -4,10 +4,14 @@ Separate images preserve NVS; a single padded image would erase saved settings.
 """
 from pathlib import Path
 import hashlib
+import os
 import shlex
+import sys
 import zipfile
 
 Import("env")
+sys.path.insert(0, str(Path(env.subst("$PROJECT_DIR")) / "scripts"))
+from firmware_signing import sign_image
 
 
 def package_firmware(source, target, env):
@@ -17,7 +21,8 @@ def package_firmware(source, target, env):
         output /= environment
     stem = "bootswitch-" + environment
     output.mkdir(parents=True, exist_ok=True)
-    features = {"BOOTSWITCH_ENABLE_REMOTE_FLASH": 0, "BOOTSWITCH_ENABLE_USB_UPDATE": 0,
+    features = {"BOOTSWITCH_ENABLE_REMOTE_FLASH": 0, "BOOTSWITCH_ENABLE_USB_UPDATE": 1,
+                "BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE": 0,
                 "BOOTSWITCH_DISABLE_BATTERY_CHARGING": 0}
     for definition in env.get("CPPDEFINES", []):
         if isinstance(definition, (tuple, list)) and definition[0] in features:
@@ -25,6 +30,9 @@ def package_firmware(source, target, env):
         elif isinstance(definition, str) and definition in features:
             features[definition] = 1
     firmware = Path(env.subst("$BUILD_DIR/${PROGNAME}.bin"))
+    signing_key = os.environ.get("BOOTSWITCH_SIGNING_KEY_FILE")
+    signed = (sign_image(firmware.read_bytes(), signing_key)
+              if signing_key and not features["BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE"] else None)
     images = [(offset, Path(env.subst(str(path))))
               for offset, path in env["FLASH_EXTRA_IMAGES"]]
     images.append((env.subst("$ESP32_APP_OFFSET"), firmware))
@@ -52,8 +60,12 @@ def package_firmware(source, target, env):
     usb_instructions = (
         'USB-disk firmware updates are enabled. Copy the application firmware.bin\n'
         'to BOOTSWITCH as FIRMWARE.BIN, then safely eject to install and restart.\n'
+        'Unsigned images are accepted in this development build.\n'
         'This preserves settings and does not update the bootloader/partition map.\n'
-        if features["BOOTSWITCH_ENABLE_USB_UPDATE"] else
+        if features["BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE"] else
+        'USB-disk updates require a valid BootSwitch ECDSA signature. Copy the\n'
+        'separate FIRMWARE.BIN release asset directly to BOOTSWITCH,\n'
+        'then safely eject to install. Raw firmware.bin is only for serial flashing.\n') if features["BOOTSWITCH_ENABLE_USB_UPDATE"] else (
         'USB-disk firmware updates are disabled. FIRMWARE.BIN is ignored.\n')
     charge_instructions = (
         'Battery charging is disabled at startup for power measurements.\n'
@@ -102,6 +114,13 @@ SHA256SUMS contains hashes of the supplied images and instructions.
             entry.external_attr = 0o100644 << 16
             bundle.writestr(entry, data)
     (output / f"{stem}.bin").write_bytes(firmware.read_bytes())
+    update = output / "FIRMWARE.BIN"
+    if signed is not None:
+        update.write_bytes(signed)
+        print(f"Signed USB update {update}")
+    else:
+        # A previous signed build must not masquerade as this build's update.
+        update.unlink(missing_ok=True)
     print(f"Packaged {archive}")
 
 

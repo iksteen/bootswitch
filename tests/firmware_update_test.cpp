@@ -71,6 +71,7 @@ std::vector<uint8_t> payload(size_t size) {
 esp_partition_t running{0x10000, 0x330000}, target{0x340000, 0x330000};
 bool missingSlot = false, beginFails = false, writeFails = false, validationFails = false;
 int imageLengthDelta = 0;
+size_t verifiedImageLength = 0;
 unsigned begins = 0, writes = 0, ends = 0, aborts = 0, activations = 0;
 size_t expectedSize = 0, lastProgress = 0;
 std::vector<uint8_t> flashed;
@@ -80,6 +81,7 @@ void resetOta() {
   begins = writes = ends = aborts = activations = 0;
   expectedSize = lastProgress = 0;
   imageLengthDelta = 0;
+  verifiedImageLength = 0;
   flashed.clear();
 }
 void progress(size_t written, size_t total) {
@@ -173,6 +175,73 @@ void otaTests(Fixture& fixture) {
   assert(stageFirmware(fixture.open(), staged) && !staged && !begins);
   assert(!activations); // Staging never changes the selected boot partition.
 }
+
+std::vector<uint8_t> readFile(const std::string& path) {
+  std::ifstream input(path, std::ios::binary);
+  assert(input.good());
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
+}
+
+void signatureTests(Fixture& fixture, const std::string& directory) {
+  const auto content = readFile(directory + "/raw.bin");
+  const auto signedImage = readFile(directory + "/signed.bin");
+  const esp_partition_t* staged = &running;
+  assert(signedImage.size() == content.size() + 80);
+  std::vector<uint16_t> chain;
+  for (size_t i = 0; i < (signedImage.size() + 511) / 512; ++i)
+    chain.push_back(i % 2 ? 4000 + i / 2 : 6 + i / 2);
+  fixture.install(signedImage, chain);
+  resetOta(); verifiedImageLength = content.size();
+  assert(!stageFirmware(fixture.open(), staged, progress));
+  assert(staged == &target && flashed == content && lastProgress == content.size());
+  assert(begins == 1 && ends == 1 && !aborts && !activations);
+  // The trailer does not consume OTA capacity, even if the application fills it.
+  resetOta(); target.size = content.size(); verifiedImageLength = content.size();
+  assert(!stageFirmware(fixture.open(), staged) && staged == &target);
+  resetOta(); target.size = content.size() - 1;
+  assert(stageFirmware(fixture.open(), staged) && !staged && !begins);
+  for (size_t offset : {size_t(0), size_t(4096), content.size() - 1,
+                        content.size(), content.size() + 8, content.size() + 12,
+                        content.size() + 16, signedImage.size() - 1}) {
+    auto invalid = signedImage;
+    invalid[offset] ^= 1;
+    fixture.install(invalid);
+    resetOta(); verifiedImageLength = content.size();
+    assert(stageFirmware(fixture.open(), staged) && !staged && !activations);
+    if (!BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE || offset != content.size()) assert(!begins);
+  }
+  fixture.install(readFile(directory + "/wrong-key.bin"));
+  resetOta();
+  assert(stageFirmware(fixture.open(), staged) && !staged && !begins);
+  // Invalid scalar encodings are rejected by the real mbedTLS verifier.
+  auto invalid = signedImage;
+  std::fill(invalid.end() - 64, invalid.end(), 0);
+  fixture.install(invalid); resetOta();
+  assert(stageFirmware(fixture.open(), staged) && !staged && !begins);
+  std::fill(invalid.end() - 64, invalid.end(), 255);
+  fixture.install(invalid); resetOta();
+  assert(stageFirmware(fixture.open(), staged) && !staged && !begins);
+  for (auto invalid : {signedImage, content, std::vector<uint8_t>(12)}) {
+    invalid.pop_back();
+    fixture.install(invalid); resetOta(); verifiedImageLength = content.size();
+    assert(stageFirmware(fixture.open(), staged) && !staged && !activations);
+    if (!BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE) assert(!begins);
+  }
+  invalid = signedImage;
+  invalid.push_back(0);
+  fixture.install(invalid); resetOta(); verifiedImageLength = content.size();
+  assert(stageFirmware(fixture.open(), staged) && !staged && !activations);
+  if (!BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE) assert(!begins);
+  fixture.install(content); resetOta();
+  const auto* error = stageFirmware(fixture.open(), staged);
+  if (BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE) {
+    assert(!error && staged == &target && flashed == content);
+  } else assert(error && !staged && !begins);
+  // Authentication does not bypass ESP-IDF validation or activate an image.
+  fixture.install(signedImage); resetOta(); validationFails = true;
+  assert(stageFirmware(fixture.open(), staged) && !staged && ends == 1 && !activations);
+  std::cout << "Real ECDSA verification, tampering, wrong keys, unsigned policy and trailer stripping passed.\n";
+}
 }  // namespace
 
 const esp_partition_t* esp_ota_get_running_partition() { return &running; }
@@ -200,12 +269,16 @@ esp_err_t esp_ota_set_boot_partition(const esp_partition_t*) { ++activations; re
 esp_err_t esp_image_verify(esp_image_load_mode_t, const esp_partition_pos_t* position,
                            esp_image_metadata_t* metadata) {
   assert(position->offset == target.address && position->size == expectedSize);
-  metadata->image_len = expectedSize + imageLengthDelta;
+  metadata->image_len = (verifiedImageLength ? verifiedImageLength : expectedSize) + imageLengthDelta;
   return ESP_OK;
 }
 
 int main(int argc, char** argv) {
   Fixture fixture;
+  if (argc == 3 && std::string(argv[1]) == "--signed-tests") {
+    signatureTests(fixture, argv[2]);
+    return 0;
+  }
   if (argc == 4 && std::string(argv[1]) == "--extract") {
     std::ifstream input(argv[2], std::ios::binary);
     fixture.bytes.assign(std::istreambuf_iterator<char>(input), {});
@@ -220,7 +293,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   diskTests(fixture);
-  otaTests(fixture);
+  if (BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE) otaTests(fixture);
   if (argc == 2) {
     fixture.reset();
     std::ofstream output(std::string(argv[1]) + "/firmware-disk.img", std::ios::binary);
