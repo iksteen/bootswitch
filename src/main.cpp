@@ -25,6 +25,7 @@
 #include "usb_wake.h"
 #include "display_telemetry.h"
 #include "firmware_update.h"
+#include "update_coordinator.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
 #error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
@@ -46,8 +47,6 @@ VirtualDisk virtualDisk(nullptr, 0);
 SemaphoreHandle_t diskMutex = nullptr;
 bool ramDiskReady = false;
 char configText[VirtualDisk::kMaxConfigSize + 1];
-std::atomic<bool> applyRequested{false};
-std::atomic<bool> diskEjected{false};
 // The TinyUSB event hook can run in an ISR; only hand off a lock-free flag.
 static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "USB wake flag must be ISR safe");
 std::atomic<bool> usbWakeRequested{false};
@@ -76,6 +75,7 @@ uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 char firmwareStatus[40];
+void firmwareProgress(size_t written, size_t total);
 #endif
 void drawScreen();
 
@@ -155,6 +155,46 @@ bool setMode(Mode mode) {
   return true;
 }
 
+class DeviceUpdateBackend : public bootswitch::UpdateBackend {
+ public:
+  void lockDisk() override { xSemaphoreTake(diskMutex, portMAX_DELAY); }
+  void unlockDisk() override { xSemaphoreGive(diskMutex); }
+  void mediaPresent(bool present) override { disk.mediaPresent(present); }
+  bool settingsAvailable() const override { return storageReady; }
+  bool loadSavedSettings(Settings& saved) override {
+    saved = settings;
+    if (storageReady && preferences.isKey("settings")) {
+      const String text = preferences.getString("settings");
+      return !bootswitch::parseSettings(text.c_str(), text.length(), saved);
+    }
+    return true;
+  }
+  bool saveSettings(const char* text, size_t length) override {
+    const String current = preferences.getString("settings");
+    return current == text || preferences.putString("settings", text) == length;
+  }
+  void beginRecovery() override {
+    // Finish the eject response, then remove USB long enough for hosts to
+    // discard the old FAT/cache. Writes remain gated through the rebuild.
+    delay(250);
+    if (usbReady) tud_disconnect();
+    delay(250);
+  }
+  void endRecovery() override { if (usbReady) tud_connect(); }
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  const char* stage(VirtualDisk::File file, const esp_partition_t*& staged) override {
+    problem = "Validating firmware";
+    drawScreen();
+    return bootswitch::stageFirmware(file, staged, firmwareProgress, [] { delay(1); });
+  }
+  bool activate(const esp_partition_t* staged) override {
+    return esp_ota_set_boot_partition(staged) == ESP_OK;
+  }
+#endif
+};
+DeviceUpdateBackend updateBackend;
+bootswitch::UpdateCoordinator updates(virtualDisk, updateBackend, configText, sizeof(configText));
+
 int32_t readDisk(uint32_t lba, uint32_t offset, void* buffer, uint32_t size) {
   if (!ramDiskReady) return BootDisk::read(lba, offset, buffer, size, selected.load());
   xSemaphoreTake(diskMutex, portMAX_DELAY);
@@ -164,55 +204,16 @@ int32_t readDisk(uint32_t lba, uint32_t offset, void* buffer, uint32_t size) {
 }
 
 int32_t writeDisk(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t size) {
-  if (!ramDiskReady || diskEjected.load()) {
+  if (!ramDiskReady || !updates.writable()) {
     tud_msc_set_sense(0, SCSI_SENSE_DATA_PROTECT, 0x27, 0);
     return -1;
   }
-  xSemaphoreTake(diskMutex, portMAX_DELAY);
-  const int32_t result = diskEjected.load() ? -1 : virtualDisk.write(lba, offset, buffer, size);
-  xSemaphoreGive(diskMutex);
-  return result;
+  return updates.write(lba, offset, buffer, size);
 }
 
 bool startStopDisk(uint8_t, bool start, bool loadEject) {
-  if (loadEject && !start && ramDiskReady && !diskEjected.exchange(true)) {
-    // Host has flushed its filesystem before issuing the eject command. Keep
-    // parsing, NVS writes, and restart work out of the USB callback/task.
-    disk.mediaPresent(false);
-    applyRequested.store(true);
-  }
+  if (loadEject && !start && ramDiskReady) updates.requestApply();
   return true;
-}
-
-bool rebuildConfigurationDisk() {
-  // Eject/apply has already made the medium unavailable and blocked writes.
-  // Re-enumerate afterward so hosts discard the old FAT/cache even when they
-  // did not poll TEST UNIT READY during this short removal interval.
-  // Let TinyUSB finish the eject response before removing the USB device.
-  delay(250);
-  if (usbReady) tud_disconnect();
-  const uint32_t disconnectedAt = millis();
-  Settings saved = settings;
-  bool valid = true;
-  if (storageReady && preferences.isKey("settings")) {
-    const String text = preferences.getString("settings");
-    valid = !bootswitch::parseSettings(text.c_str(), text.length(), saved);
-  }
-  size_t length = 0;
-  bool rebuilt = false;
-  if (valid && bootswitch::formatSettings(saved, configText, sizeof(configText), length)) {
-    xSemaphoreTake(diskMutex, portMAX_DELAY);
-    rebuilt = virtualDisk.format(configText, length);
-    xSemaphoreGive(diskMutex);
-  }
-  while (uint32_t(millis() - disconnectedAt) < 250) delay(1);
-  // Publish only a complete fresh disk. On recovery failure it stays ejected.
-  if (rebuilt) {
-    diskEjected.store(false);
-    disk.mediaPresent(true);
-  }
-  if (usbReady) tud_connect();
-  return rebuilt;
 }
 
 #if BOOTSWITCH_ENABLE_USB_UPDATE
@@ -230,52 +231,16 @@ void firmwareProgress(size_t written, size_t total) {
 #endif
 
 void applyConfiguration() {
-  if (!ramDiskReady || restartPending != RestartAction::None) return;
+  if (!ramDiskReady || restartPending != RestartAction::None || !updates.applyPending()) return;
   wakeDisplay();
-  diskEjected.store(true);
-  disk.mediaPresent(false);
-  size_t length = 0;
-#if BOOTSWITCH_ENABLE_USB_UPDATE
-  VirtualDisk::File firmware;
-#endif
-  xSemaphoreTake(diskMutex, portMAX_DELAY);
-  const char* error = virtualDisk.configuration(configText, sizeof(configText), length);
-#if BOOTSWITCH_ENABLE_USB_UPDATE
-  if (!error) error = virtualDisk.firmware(firmware);
-#endif
-  xSemaphoreGive(diskMutex);
-  Settings candidate;
-  if (!error) error = bootswitch::parseSettings(configText, length, candidate);
-  if (!error && !storageReady) error = "Settings unavailable";
-#if BOOTSWITCH_ENABLE_USB_UPDATE
-  const esp_partition_t* staged = nullptr;
-  if (!error && firmware) {
-    problem = "Validating firmware";
-    drawScreen();
-    error = bootswitch::stageFirmware(firmware, staged, firmwareProgress, [] { delay(1); });
-  }
-#endif
-  if (!error) {
-    // Canonicalize before storing; comments, temp files and other host data
-    // never reach flash. One NVS value replaces all fields atomically.
-    bootswitch::formatSettings(candidate, configText, sizeof(configText), length);
-    const String current = preferences.getString("settings");
-    if (current != configText && preferences.putString("settings", configText) != length)
-      error = "Settings save failed";
-  }
-#if BOOTSWITCH_ENABLE_USB_UPDATE
-  if (!error && staged && esp_ota_set_boot_partition(staged) != ESP_OK)
-    error = "Firmware activation failed";
-  problem = error ? error : (staged ? "Firmware ready; restarting" : "Config saved; restarting");
-#else
-  problem = error ? error : "Config saved; restarting";
-#endif
+  bootswitch::ApplyResult result;
+  if (!updates.processApply(result)) return;
+  problem = result.error ? result.error :
+      (result.firmware ? "Firmware ready; restarting" : "Config saved; restarting");
   redraw = true;
-  if (!error) {
+  if (result.restart) {
     restartAt = millis() + 500;
     restartPending = RestartAction::Application;
-  } else if (!rebuildConfigurationDisk()) {
-    problem = "USB disk recovery failed";
   }
 }
 
@@ -551,7 +516,7 @@ void drawScreen() {
 }
 }  // namespace
 
-bool bootSwitchDiskWritable() { return ramDiskReady && !diskEjected.load(); }
+bool bootSwitchDiskWritable() { return ramDiskReady && updates.writable(); }
 
 // A bus reset normally accompanies reboot/re-enumeration; resume also covers
 // waking a suspended host. Neither event proves that the host actually rebooted.
@@ -642,7 +607,8 @@ void loop() {
   }
   if (M5.BtnB.wasPressed()) wakeDisplay();
   if (M5.BtnB.wasClicked()) wakeHost();
-  if (applyRequested.exchange(false) || M5.BtnB.wasHold()) applyConfiguration();
+  if (ramDiskReady && M5.BtnB.wasHold()) updates.requestApply();
+  applyConfiguration();
   if (M5.BtnA.wasPressed()) {
     // A dark screen requires a separate wake press, avoiding a blind OS change.
     if (!screenAwake) wakeDisplay();

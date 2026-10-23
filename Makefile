@@ -1,4 +1,4 @@
-.PHONY: test firmware efi
+.PHONY: test test-thread-sanitizer firmware efi
 # Arch installs mbedTLS 2 alongside newer ABIs; Ubuntu uses the normal prefix.
 MBEDTLS_CFLAGS ?= $(if $(wildcard /usr/include/mbedtls2/mbedtls/pk.h),-I/usr/include/mbedtls2)
 MBEDTLS_LIBS ?= $(if $(wildcard /usr/lib/mbedtls2/libmbedcrypto.so),-L/usr/lib/mbedtls2) -lmbedcrypto
@@ -30,6 +30,15 @@ test:
 	  tests/firmware_update_test.cpp $(MBEDTLS_LIBS) -o build/firmware_update_signed_test
 	./build/firmware_update_signed_test --signed-tests build/signing-tests
 	python3 tests/check_firmware_fat.py
+	@for allow_unsigned in 0 1; do \
+	  $(CXX) -std=c++11 -Wall -Wextra -Werror -pthread -fsanitize=address,undefined \
+	    -DBOOTSWITCH_ENABLE_USB_UPDATE=1 -DBOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE=$$allow_unsigned \
+	    $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
+	    src/boot_disk.cpp src/virtual_disk.cpp src/settings.cpp src/firmware_update.cpp \
+	    src/update_coordinator.cpp tests/update_coordinator_test.cpp $(MBEDTLS_LIBS) \
+	    -o build/update_coordinator_$${allow_unsigned}_test && \
+	  ./build/update_coordinator_$${allow_unsigned}_test build/signing-tests || exit 1; \
+	done
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_test
 	./build/ble_command_test
@@ -51,6 +60,17 @@ test:
 	./build/usb_wake_test
 	python3 tests/check_usb_dcd.py
 	python3 tests/check_linux_wake.py
+
+test-thread-sanitizer:
+	mkdir -p build
+	$(PYTHON) tests/check_firmware_signing.py --fixtures build/signing-tests
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -pthread -fsanitize=thread \
+	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
+	  $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
+	  src/boot_disk.cpp src/virtual_disk.cpp src/settings.cpp src/firmware_update.cpp \
+	  src/update_coordinator.cpp tests/update_coordinator_test.cpp \
+	  $(MBEDTLS_LIBS) -o build/update_coordinator_tsan_test
+	./build/update_coordinator_tsan_test build/signing-tests
 
 firmware:
 	pio run

@@ -92,6 +92,8 @@ pinned to commit SHAs, with weekly Dependabot checks for updates. See the
 # C++ compiler, Python 3, mbedTLS 2.x headers/library, dosfstools, mtools:
 python -m pip install -r requirements-signing.txt
 make test
+# Optional separate data-race instrumentation for the coordinator:
+make test-thread-sanitizer
 # GNU-EFI, QEMU, OVMF, installed systemd-boot EFI binary:
 python3 tests/check_efi.py
 # Production package, development firmware, and compiled feature checks:
@@ -114,6 +116,18 @@ production requires signatures, and that only development enables remote flash.
 Signing tests use disposable keys and real mbedTLS verification in both policies,
 covering wrong keys, unsigned images, altered content/metadata/signatures,
 truncation, extra bytes, fragmented FAT files and signature-trailer stripping.
+The same update coordinator used by the firmware runs in native multithreaded
+tests with real signature verification and simulated USB/NVS/OTA backends.
+Condition-variable checkpoints force admitted and queued writes to race eject,
+pause after authentication, and hold recovery before formatting and publication.
+The tests use no scheduling sleeps and run under ASan/UBSan in both build policies.
+CI includes them through `make test`; `make test-thread-sanitizer` runs the same
+coordinator schedules separately with ThreadSanitizer.
+Injected failures cover OTA begin/write/end, image verification, settings saves,
+activation and disk recovery, including a corrected signed upload after failure.
+Valid settings saved before an activation failure remain committed; recovery
+rebuilds from those saved settings. Partial physical flash writes and power loss
+remain hardware-test concerns.
 Bluetooth power-adapter tests check initialization defaults, preservation of
 explicit caller settings, and propagation of controller errors. The live HTTP
 checks also verify authenticated power diagnostics and the CPU/APB clocks.
