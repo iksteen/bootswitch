@@ -339,7 +339,11 @@ void startNetwork() {
   WiFi.setAutoReconnect(true);
   // Install credentials without connecting: the listen interval must be set
   // before association, and begin(ssid, password) would overwrite it.
-  WiFi.begin(settings.ssid, settings.password, 0, nullptr, false);
+  uint8_t bssid[6];
+  const uint8_t* pinnedAp = settings.wifiBssidBytes(bssid) ? bssid : nullptr;
+  // Scan channels automatically even when the AP is pinned: mesh nodes can
+  // change channel without changing their BSSID.
+  WiFi.begin(settings.ssid, settings.password, 0, pinnedAp, false);
   if (settings.wifiListenInterval != 0) {
     wifi_config_t config{};
     bool configured = esp_wifi_get_config(WIFI_IF_STA, &config) == ESP_OK;

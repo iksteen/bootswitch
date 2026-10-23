@@ -10,6 +10,7 @@ struct Settings {
   static constexpr uint32_t kMaxWifiListenInterval = 10;
   char ssid[33] = {};
   char password[65] = {};
+  char wifiBssid[18] = {};
   char apiKey[97] = {};
   char hostname[64] = "bootswitch";
   char blePasskey[7] = {};
@@ -20,6 +21,8 @@ struct Settings {
   bool wifiEnabled() const { return ssid[0] != 0; }
   bool apiEnabled() const { return apiKey[0] != 0; }
   bool bleEnabled() const { return blePasskey[0] != 0; }
+  // Empty selects any AP for the SSID. Nonempty pins one unicast AP address.
+  bool wifiBssidBytes(uint8_t output[6]) const;
 };
 
 // Values are literal UTF-8 bytes after '='; only keys are whitespace-trimmed.

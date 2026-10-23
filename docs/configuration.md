@@ -14,6 +14,7 @@ Open **CONFIG.INI** on the **BOOTSWITCH** USB drive in a plain text editor:
 ```ini
 wifi_ssid=
 wifi_password=
+wifi_bssid=
 api_key=
 hostname=bootswitch
 ble_passkey=
@@ -44,6 +45,7 @@ saved CONFIG.INI, then edit it again.
 | --- | --- | --- |
 | `wifi_ssid` | Empty | Empty disables Wi-Fi; otherwise up to 32 UTF-8 bytes. |
 | `wifi_password` | Empty | Empty for an open network; otherwise 8–63 bytes or exactly 64 hex digits for a raw WPA key. Unused with Wi-Fi off. |
+| `wifi_bssid` | Empty | Optional access-point MAC, e.g. `02:11:22:33:44:55`. Empty allows automatic AP selection; a value pins one radio for the configured SSID. |
 | `api_key` | Empty | Empty disables HTTP/API; otherwise 16–96 printable ASCII characters without whitespace. Also the web password for user `admin`. |
 | `hostname` | `bootswitch` | 1–63 lowercase letters, digits or hyphens; no leading or trailing hyphen. |
 | `ble_passkey` | Empty | Empty disables BLE; otherwise exactly six digits, including any leading zeros. |
@@ -54,6 +56,16 @@ Wi-Fi can connect with HTTP/API disabled. An empty API key never permits
 anonymous access. BLE is independent of Wi-Fi and the API key. Button and USB
 boot selection work with both radios off. See [Controls](controls.md) for login,
 pairing and commands.
+
+## Choosing a mesh access point
+
+`wifi_bssid` can pin a stationary Stick to one radio in a mesh network. Use the
+radio's BSSID, which can differ from the node's printed hardware MAC.
+
+With a pin set, the Stick scans for that BSSID across channels, so an AP channel
+change does not require editing the setting. It will not fail over to a different
+BSSID if the selected radio is unavailable. Clear `wifi_bssid` to restore automatic
+selection. Use distinct hostnames when running several BootSwitch units.
 
 ## Wi-Fi power saving
 

@@ -22,6 +22,28 @@ bool hexKey(const char* value) {
   return true;
 }
 
+bool parseBssid(const char* text, uint8_t output[6]) {
+  if (std::strlen(text) != 17) return false;
+  uint8_t bytes[6] = {};
+  bool nonzero = false;
+  for (unsigned i = 0; i < 6; ++i) {
+    if (i && text[i * 3 - 1] != ':') return false;
+    for (unsigned nibble = 0; nibble < 2; ++nibble) {
+      const char c = text[i * 3 + nibble];
+      unsigned digit;
+      if (c >= '0' && c <= '9') digit = c - '0';
+      else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+      else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+      else return false;
+      bytes[i] = uint8_t((bytes[i] << 4) | digit);
+    }
+    nonzero = nonzero || bytes[i] != 0;
+  }
+  if (!nonzero || (bytes[0] & 1)) return false;
+  std::memcpy(output, bytes, sizeof(bytes));
+  return true;
+}
+
 bool unsignedSetting(const char* value, uint32_t maximum, uint32_t& output) {
   if (!*value) return false;
   uint32_t parsed = 0;
@@ -37,6 +59,11 @@ bool unsignedSetting(const char* value, uint32_t maximum, uint32_t& output) {
 }
 }  // namespace
 
+bool Settings::wifiBssidBytes(uint8_t output[6]) const {
+  return output && std::memchr(wifiBssid, 0, sizeof(wifiBssid)) &&
+         parseBssid(wifiBssid, output);
+}
+
 const char* validateSettings(const Settings& s) {
   if (s.screenTimeoutSeconds > Settings::kMaxScreenTimeoutSeconds)
     return "Screen timeout out of range";
@@ -45,10 +72,13 @@ const char* validateSettings(const Settings& s) {
   // Arrays must be terminated even when loading untrusted settings.
   if (!std::memchr(s.ssid, 0, sizeof(s.ssid)) ||
       !std::memchr(s.password, 0, sizeof(s.password)) ||
+      !std::memchr(s.wifiBssid, 0, sizeof(s.wifiBssid)) ||
       !std::memchr(s.apiKey, 0, sizeof(s.apiKey)) ||
       !std::memchr(s.hostname, 0, sizeof(s.hostname)) ||
       !std::memchr(s.blePasskey, 0, sizeof(s.blePasskey))) return "Setting too long";
   if (!textValue(s.ssid) || !textValue(s.password)) return "Invalid Wi-Fi text";
+  uint8_t bssid[6];
+  if (s.wifiBssid[0] && !s.wifiBssidBytes(bssid)) return "Invalid Wi-Fi BSSID";
   const size_t passwordLength = std::strlen(s.password);
   if (s.wifiEnabled() && passwordLength && (passwordLength < 8 ||
       (passwordLength == 64 && !hexKey(s.password)))) return "Invalid Wi-Fi password";
@@ -108,6 +138,7 @@ const char* parseSettings(const char* text, size_t length, Settings& output) {
       {"ble_passkey", candidate.blePasskey, sizeof(candidate.blePasskey), 16},
       {"screen_timeout", timeoutText, sizeof(timeoutText), 32},
       {"wifi_listen_interval", listenIntervalText, sizeof(listenIntervalText), 64},
+      {"wifi_bssid", candidate.wifiBssid, sizeof(candidate.wifiBssid), 128},
     };
     for (const auto& field : fields) {
       if (std::strlen(field.name) == keyEnd - keyStart &&
@@ -146,12 +177,14 @@ bool formatSettings(const Settings& s, char* output, size_t capacity, size_t& le
       "# Values are literal: no quotes or spaces added around '='.\r\n"
       "# Credentials are readable by anyone with access to this USB disk.\r\n"
       "wifi_ssid=%s\r\nwifi_password=%s\r\napi_key=%s\r\nhostname=%s\r\n"
+      "# Optional AP MAC; empty allows automatic access-point selection.\r\n"
+      "wifi_bssid=%s\r\n"
       "ble_passkey=%s\r\n"
       "# Screen timeout in seconds; 0 keeps the display on.\r\n"
       "screen_timeout=%" PRIu32 "\r\n"
       "# Wi-Fi receive interval: 0 follows AP DTIM; 1-10 counts beacon intervals.\r\n"
       "wifi_listen_interval=%" PRIu32 "\r\n",
-      s.ssid, s.password, s.apiKey, s.hostname, s.blePasskey, s.screenTimeoutSeconds,
+      s.ssid, s.password, s.apiKey, s.hostname, s.wifiBssid, s.blePasskey, s.screenTimeoutSeconds,
       s.wifiListenInterval);
   if (written < 0 || static_cast<size_t>(written) >= capacity) return false;
   length = static_cast<size_t>(written);

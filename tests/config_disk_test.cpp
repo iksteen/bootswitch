@@ -20,6 +20,7 @@ static const std::string valid =
 bool sameSettings(const Settings& a, const Settings& b) {
   return std::strcmp(a.ssid, b.ssid) == 0 &&
          std::strcmp(a.password, b.password) == 0 &&
+         std::strcmp(a.wifiBssid, b.wifiBssid) == 0 &&
          std::strcmp(a.apiKey, b.apiKey) == 0 &&
          std::strcmp(a.hostname, b.hostname) == 0 &&
          std::strcmp(a.blePasskey, b.blePasskey) == 0 &&
@@ -60,6 +61,12 @@ void parserTests() {
                               "4294967296", "99999999999999999999999"})
     rejects(valid + "wifi_listen_interval=" + invalid + "\n");
   rejects(valid + "wifi_listen_interval=0\nwifi_listen_interval=10\n");
+  for (const char* invalid : {"02:11:22:33:44", "02:11:22:33:44:55:66",
+                              "02-11-22-33-44-55", "02:11:22:33:44:gg",
+                              "01:11:22:33:44:55", "ff:ff:ff:ff:ff:ff",
+                              "00:00:00:00:00:00", " 02:11:22:33:44:55"})
+    rejects(valid + "wifi_bssid=" + invalid + "\n");
+  rejects(valid + "wifi_bssid=\nwifi_bssid=02:11:22:33:44:55\n");
   rejects("wifi_ssid=" + std::string(33, 'x') + "\nwifi_password=\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=short\napi_key=0123456789abcdef\nhostname=test\n");
   rejects("wifi_ssid=test\nwifi_password=\napi_key=short\nhostname=test\n");
@@ -90,6 +97,25 @@ void parserTests() {
   assert(!validateSettings(empty));
   assert(empty.screenTimeoutSeconds == 60);
   assert(empty.wifiListenInterval == 0);
+  uint8_t ap[6] = {1, 2, 3, 4, 5, 6};
+  assert(!empty.wifiBssidBytes(ap) && ap[0] == 1);
+  // Optional pins survive disk saves; old files and empty values select any AP.
+  const std::string pinned = valid + "wifi_bssid=02:ab:CD:33:44:55\n";
+  assert(!parseSettings(pinned.data(), pinned.size(), roundtrip));
+  assert(roundtrip.wifiBssidBytes(ap));
+  const uint8_t expectedAp[] = {2, 0xab, 0xcd, 0x33, 0x44, 0x55};
+  assert(std::memcmp(ap, expectedAp, sizeof(ap)) == 0);
+  assert(formatSettings(roundtrip, serialized, sizeof(serialized), length));
+  Settings restoredPin;
+  assert(!parseSettings(serialized, length, restoredPin));
+  assert(sameSettings(roundtrip, restoredPin));
+  const std::string automatic = valid + "wifi_bssid=\n";
+  assert(!parseSettings(automatic.data(), automatic.size(), roundtrip));
+  assert(!roundtrip.wifiBssidBytes(ap));
+  Settings unterminatedBssid;
+  std::memset(unterminatedBssid.wifiBssid, 'a', sizeof(unterminatedBssid.wifiBssid));
+  assert(validateSettings(unterminatedBssid));
+  assert(!unterminatedBssid.wifiBssidBytes(ap));
   assert(!parseSettings("", 0, roundtrip));
   assert(!roundtrip.wifiEnabled() && !roundtrip.apiEnabled());
   assert(!parseSettings("# No credentials\n", 17, roundtrip));
