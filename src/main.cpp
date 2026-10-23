@@ -75,9 +75,12 @@ uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 char firmwareStatus[40];
+int lastFirmwarePercent = -1;
+uint32_t lastFirmwareDraw = 0;
 void firmwareProgress(size_t written, size_t total);
 #endif
 void drawScreen();
+void drawStatusLine();
 
 void wakeDisplay() {
   lastDisplayActivity = millis();
@@ -183,6 +186,7 @@ class DeviceUpdateBackend : public bootswitch::UpdateBackend {
   void endRecovery() override { if (usbReady) tud_connect(); }
 #if BOOTSWITCH_ENABLE_USB_UPDATE
   const char* stage(VirtualDisk::File file, const esp_partition_t*& staged) override {
+    lastFirmwarePercent = -1;
     problem = "Validating firmware";
     drawScreen();
     return bootswitch::stageFirmware(file, staged, firmwareProgress, [] { delay(1); });
@@ -219,12 +223,15 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 void firmwareProgress(size_t written, size_t total) {
   const unsigned percent = written * 100u / total;
-  char status[sizeof(firmwareStatus)];
-  std::snprintf(status, sizeof(status), "Updating firmware: %u%%", percent);
-  if (std::strcmp(status, firmwareStatus)) {
-    std::strcpy(firmwareStatus, status);
+  const uint32_t now = millis();
+  // Keep intermediate updates at 10 Hz; always show the first and final value.
+  if (int(percent) != lastFirmwarePercent &&
+      (lastFirmwarePercent < 0 || percent == 100 || uint32_t(now - lastFirmwareDraw) >= 100)) {
+    std::snprintf(firmwareStatus, sizeof(firmwareStatus), "Updating firmware: %u%%", percent);
     problem = firmwareStatus;
-    drawScreen();
+    drawStatusLine();
+    lastFirmwarePercent = percent;
+    lastFirmwareDraw = now;
   }
   delay(1);  // Yield while USB and the idle watchdog remain active.
 }
@@ -484,6 +491,15 @@ void drawDisplayTelemetry() {
   display.drawRightString(displayTelemetry.text(), display.width() - 8, 5);
 }
 
+void drawStatusLine() {
+  auto& display = M5.Display;
+  display.setTextSize(1);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextPadding(display.width() - 16);
+  display.drawString(problem ? problem : "A: toggle  B: wake PC", 8, 62);
+  display.setTextPadding(0);
+}
+
 void drawScreen() {
   auto& display = M5.Display;
   display.fillScreen(TFT_BLACK);
@@ -495,10 +511,7 @@ void drawScreen() {
   display.setTextSize(3);
   display.setTextColor(selected.load() == Mode::Windows ? TFT_CYAN : TFT_GREEN);
   display.println(selected.load() == Mode::Windows ? "Windows" : "Linux");
-  display.setTextSize(1);
-  display.setTextColor(TFT_WHITE);
-  display.setCursor(8, 62);
-  display.println(problem ? problem : "A: toggle  B: wake PC");
+  drawStatusLine();
   display.setCursor(8, 80);
   if (!usbReady) display.println("USB init failed");
   else display.println(ramDiskReady ? "CONFIG.INI: eject to apply" : "USB: boot selector");
