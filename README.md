@@ -83,18 +83,61 @@ The side reset/power button is **not** the mode toggle; use the front A button.
 
 ### Optional development features
 
-The default **sticks3** build disables remote download-mode entry. Set the
-compile-time flag `BOOTSWITCH_ENABLE_REMOTE_FLASH=1` in `build_flags`, or use the
-**sticks3-dev** environment to enable API `mode=flash` and BLE `flash`:
+The default **sticks3** build disables remote download-mode entry and USB-disk
+firmware updates. Both are independent compile-time options and cannot be
+enabled through CONFIG.INI:
+
+| Build flag | Default | Enables |
+| --- | --- | --- |
+| `BOOTSWITCH_ENABLE_REMOTE_FLASH` | `0` | API `mode=flash` and BLE `flash` |
+| `BOOTSWITCH_ENABLE_USB_UPDATE` | `0` | Installing FIRMWARE.BIN on eject/apply |
+
+Set a flag to `1` in a custom PlatformIO environment's `build_flags` to enable
+that feature. The **sticks3-dev** environment enables both:
 
 ```sh
 pio run --environment sticks3-dev
 ```
 
-Its application is `.pio/build/sticks3-dev/firmware.bin`. This feature cannot be
-enabled through CONFIG.INI. When disabled, authenticated API `mode=flash` is
-rejected with HTTP 400 and BLE `flash` is ignored. The physical reset/power button
-provides download mode in either build.
+Its application is `.pio/build/sticks3-dev/firmware.bin`.
+
+With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
+400 and BLE `flash` is ignored. With USB updates disabled, FIRMWARE.BIN is an
+ordinary RAM-disk file: it is ignored on eject and discarded at restart. Normal
+CONFIG.INI saves still work. The physical reset/power button provides download
+mode in either build.
+
+### Update through the USB disk
+
+Requires `BOOTSWITCH_ENABLE_USB_UPDATE=1` in the **running** firmware. Copy
+`.pio/build/sticks3-dev/firmware.bin` (or the production application from
+`.pio/build/sticks3/firmware.bin`) to the root of **BOOTSWITCH** as
+**FIRMWARE.BIN**, then safely eject the drive:
+
+```sh
+cp .pio/build/sticks3-dev/firmware.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
+gio mount --eject "/run/media/$USER/BOOTSWITCH"
+```
+
+On Windows, copy and rename the file, then use **Safely Remove Hardware/Eject**.
+The display shows update progress, and the Stick restarts after validation and
+activation. The saved OS selection and settings are retained. Valid CONFIG.INI
+edits can be applied in the same eject operation. As with settings-only saves,
+flushing/unmounting and holding B for 1.5 seconds also applies the file.
+
+The updater writes the inactive application slot and selects it only after
+ESP-IDF validates the image. Incomplete files, corrupt FAT chains, incompatible
+chips and invalid image checksums/digests are rejected. An error appears on the
+display; reset the Stick to restore the USB disk before trying again. The RAM
+disk is rebuilt at startup, so FIRMWARE.BIN is not reapplied on later ejects.
+
+Use the application `.bin`, rather than the ZIP, EFI binary or a merged flash
+image. USB-disk updates do not replace the bootloader or partition table; use
+serial flashing when those need updating. Image validation does not
+test the new application's behavior; the physical reset/power button remains
+available for recovery through the ROM download mode. Anyone with write access
+to this USB disk can install firmware while this development feature is enabled.
+Installing the default production image disables subsequent USB-disk updates.
 
 ### Enter download mode remotely
 
@@ -185,7 +228,9 @@ saved CONFIG.INI, then edit it again.
   timing and savings depend on the AP and network traffic. See
   [Espressif's modem-sleep documentation](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-guides/wifi.html#station-sleep).
 - CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its boot
-  files. Other files and editor backups exist only in RAM and disappear on restart.
+  files. FIRMWARE.BIN installs an application update on eject only when the build
+  enables USB updates. Other files and
+  editor backups exist only in RAM and disappear on restart.
 
 Anyone who can access this USB disk can read and change its Wi-Fi password and
 API key. The configuration file intentionally contains those values in plaintext.
@@ -534,13 +579,16 @@ without changes. The disk uses 4 MiB of the StickS3's 8 MiB PSRAM and contains:
 - `MODE.TXT`: `linux` or `windows`, padded to eight bytes including newline.
 - `SWITCH.CFG`: `set bootswitch_mode=linux` or `…=windows`, with fixed file size.
 - `CONFIG.INI`: editable Wi-Fi, API key, and hostname settings.
+- `FIRMWARE.BIN`: application update only in builds enabling USB updates.
 
 The two boot files have read-only attributes; their payloads are generated from
 the selected mode on reads. Host writes go to a RAM image, which supports normal
-FAT allocation and editor saves. Only a valid configuration is committed to NVS
-after eject/apply. Filesystem damage, missing config, malformed settings and failed
-NVS saves cannot replace the last working configuration. If PSRAM allocation
-fails, USB falls back to the two-file read-only selector and the display reports
+FAT allocation and editor saves. A valid configuration is committed to NVS and an
+optional firmware update is installed after eject/apply when enabled in the
+build. Filesystem damage,
+missing config, malformed settings and failed NVS saves cannot replace the last
+working configuration. If PSRAM allocation fails, USB falls back to the two-file
+read-only selector and the display reports
 that the config disk is unavailable.
 
 Both boot integrations read the selection once during boot: set it **before

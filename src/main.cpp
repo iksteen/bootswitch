@@ -10,6 +10,7 @@
 #include <esp_wifi.h>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <freertos/semphr.h>
 #include "tusb.h"
 #include "device/dcd.h"
@@ -19,6 +20,7 @@
 #include "virtual_disk.h"
 #include "usb_wake.h"
 #include "display_telemetry.h"
+#include "firmware_update.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
 #error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
@@ -65,6 +67,10 @@ RestartAction restartPending = RestartAction::None;
 bool screenAwake = true;
 uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+char firmwareStatus[40];
+#endif
+void drawScreen();
 
 void wakeDisplay() {
   lastDisplayActivity = millis();
@@ -172,6 +178,19 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
   return true;
 }
 
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+void firmwareProgress(size_t written, size_t total) {
+  const unsigned percent = written * 100u / total;
+  char status[sizeof(firmwareStatus)];
+  std::snprintf(status, sizeof(status), "Updating firmware: %u%%", percent);
+  if (std::strcmp(status, firmwareStatus)) {
+    std::strcpy(firmwareStatus, status);
+    problem = firmwareStatus;
+    drawScreen();
+  }
+  delay(1);  // Yield while USB and the idle watchdog remain active.
+}
+#endif
 
 void applyConfiguration() {
   if (!ramDiskReady || restartPending != RestartAction::None) return;
@@ -179,12 +198,26 @@ void applyConfiguration() {
   diskEjected.store(true);
   disk.mediaPresent(false);
   size_t length = 0;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  VirtualDisk::File firmware;
+#endif
   xSemaphoreTake(diskMutex, portMAX_DELAY);
   const char* error = virtualDisk.configuration(configText, sizeof(configText), length);
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  if (!error) error = virtualDisk.firmware(firmware);
+#endif
   xSemaphoreGive(diskMutex);
   Settings candidate;
   if (!error) error = bootswitch::parseSettings(configText, length, candidate);
   if (!error && !storageReady) error = "Settings unavailable";
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  const esp_partition_t* staged = nullptr;
+  if (!error && firmware) {
+    problem = "Validating firmware";
+    drawScreen();
+    error = bootswitch::stageFirmware(firmware, staged, firmwareProgress);
+  }
+#endif
   if (!error) {
     // Canonicalize before storing; comments, temp files and other host data
     // never reach flash. One NVS value replaces all fields atomically.
@@ -193,7 +226,13 @@ void applyConfiguration() {
     if (current != configText && preferences.putString("settings", configText) != length)
       error = "Settings save failed";
   }
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  if (!error && staged && esp_ota_set_boot_partition(staged) != ESP_OK)
+    error = "Firmware activation failed";
+  problem = error ? error : (staged ? "Firmware ready; restarting" : "Config saved; restarting");
+#else
   problem = error ? error : "Config saved; restarting";
+#endif
   redraw = true;
   if (!error) {
     restartAt = millis() + 500;

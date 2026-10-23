@@ -72,8 +72,8 @@ int32_t VirtualDisk::read(uint32_t lba, uint32_t offset, void* buffer, uint32_t 
   return static_cast<int32_t>(length);
 }
 
-const char* VirtualDisk::configuration(char* output, size_t capacity, size_t& length) const {
-  if (!bytes_ || capacity_ < kCapacity || !output) return "Config disk unavailable";
+const char* VirtualDisk::layout() const {
+  if (!bytes_ || capacity_ < kCapacity) return "Config disk unavailable";
   const uint8_t* mbr = bytes_ + 446;
   const uint8_t* boot = bytes_ + BootDisk::kPartitionStart * 512;
   if (bytes_[510] != 0x55 || bytes_[511] != 0xAA || mbr[4] != 0x0E ||
@@ -95,6 +95,13 @@ const char* VirtualDisk::configuration(char* output, size_t capacity, size_t& le
     if (get16(fat + 4) < 0xFFF8 || get16(fat + 6) < 0xFFF8)
       return "Boot file chains changed";
   }
+  return nullptr;
+}
+
+const char* VirtualDisk::configuration(char* output, size_t capacity, size_t& length) const {
+  if (!output) return "Config disk unavailable";
+  if (const char* error = layout()) return error;
+  const uint8_t* root = bytes_ + kRootOffset;
   const uint8_t* file = nullptr;
   for (unsigned index = 0; index < 64; ++index) {
     const uint8_t* entry = root + index * 32;
@@ -135,4 +142,66 @@ const char* VirtualDisk::configuration(char* output, size_t capacity, size_t& le
   length = size;
   return nullptr;
 }
+
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+const char* VirtualDisk::firmware(File& output) const {
+  output = File{};
+  if (const char* error = layout()) return error;
+  const uint8_t* file = nullptr;
+  const uint8_t* root = bytes_ + kRootOffset;
+  for (unsigned index = 0; index < 64; ++index) {
+    const uint8_t* entry = root + index * 32;
+    if (entry[0] == 0) break;
+    if (entry[0] == 0xE5 || entry[11] == 0x0F) continue;
+    if (std::memcmp(entry, "FIRMWAREBIN", 11) != 0) continue;
+    if (entry[11] & 0x18) return "Firmware is not a file";
+    if (file) return "Duplicate FIRMWARE.BIN";
+    file = entry;
+  }
+  if (!file) return nullptr;
+  const uint32_t size = get32(file + 28);
+  if (!size || size > kClusterCount * 512u) return "Invalid firmware size";
+  if (get16(file + 20) != 0) return "Invalid firmware cluster";
+  uint16_t cluster = get16(file + 26);
+  // Validate the complete chain before exposing any bytes to the flash writer.
+  uint8_t visited[(kClusterCount + 7) / 8] = {};
+  uint32_t remaining = size;
+  while (remaining) {
+    if (cluster < 4 || cluster >= kClusterCount + 2) return "Invalid firmware cluster";
+    const unsigned index = cluster - 2;
+    if (visited[index / 8] & (1u << (index % 8))) return "Firmware cluster loop";
+    visited[index / 8] |= 1u << (index % 8);
+    remaining -= std::min(remaining, 512u);
+    const uint16_t next = get16(bytes_ + kFatOffset + cluster * 2);
+    if (next != get16(bytes_ + kFatOffset + BootDisk::kFatSectors * 512 + cluster * 2))
+      return "FAT copies differ";
+    if (remaining && next >= 0xFFF8) return "Firmware file incomplete";
+    if (!remaining && next < 0xFFF8) return "Invalid firmware chain";
+    cluster = next;
+  }
+  output.bytes_ = bytes_;
+  output.size_ = output.remaining_ = size;
+  output.cluster_ = get16(file + 26);
+  return nullptr;
+}
+
+size_t VirtualDisk::File::read(void* output, size_t capacity) {
+  if (!bytes_ || !output) return 0;
+  const size_t length = std::min(capacity, size_t(remaining_));
+  size_t copied = 0;
+  while (copied < length) {
+    const size_t count = std::min(length - copied, size_t(512 - offset_));
+    std::memcpy(static_cast<uint8_t*>(output) + copied,
+                bytes_ + kDataOffset + (cluster_ - 2) * 512 + offset_, count);
+    copied += count;
+    remaining_ -= count;
+    offset_ += count;
+    if (offset_ == 512 && remaining_) {
+      cluster_ = get16(bytes_ + kFatOffset + cluster_ * 2);
+      offset_ = 0;
+    }
+  }
+  return copied;
+}
+#endif
 }  // namespace bootswitch

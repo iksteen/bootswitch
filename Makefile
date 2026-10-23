@@ -11,6 +11,12 @@ test:
 	./build/config_disk_test build
 	python3 tests/check_config_fat.py
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
+	  -Itests/firmware_update_stubs -Iinclude src/boot_disk.cpp src/virtual_disk.cpp \
+	  src/firmware_update.cpp tests/firmware_update_test.cpp -o build/firmware_update_test
+	./build/firmware_update_test build
+	python3 tests/check_firmware_fat.py
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_test
 	./build/ble_command_test
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
