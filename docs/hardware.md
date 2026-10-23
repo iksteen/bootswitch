@@ -30,6 +30,11 @@ Telemetry polling stops while the screen is off. ESP32 light/deep sleep is not
 used; USB remains connected. The firmware requests that the PM1 turn off the
 status LED.
 
+The PM1 power controller uses five-second I²C idle sleep, preserving its power
+outputs. Battery reads and download-mode commands wake it before accessing its
+registers. It is also woken before board detection after an ESP reset. See
+[M5Stack's PM1 sleep documentation](https://docs.m5stack.com/en/arduino/m5sticks3/m5pm1#i2c-idle-sleep).
+
 Production firmware enables battery charging at startup. The development build
 sets `BOOTSWITCH_DISABLE_BATTERY_CHARGING=1` to exclude charging current from
 power measurements on units with an intact battery. The battery remains

@@ -16,6 +16,7 @@
 #include "device/dcd.h"
 #include "boot_disk.h"
 #include "ble_control.h"
+#include "board_power.h"
 #include "settings.h"
 #include "virtual_disk.h"
 #include "usb_wake.h"
@@ -65,6 +66,7 @@ enum class RestartAction { None, Application
 };
 RestartAction restartPending = RestartAction::None;
 bool screenAwake = true;
+bool powerControllerSleep = false;
 // Confirmed at startup; -1 means the PM1 charge state could not be configured.
 int8_t batteryChargingEnabled = -1;
 uint32_t lastDisplayActivity = 0;
@@ -440,7 +442,8 @@ bool pollDisplayTelemetry(uint32_t now) {
   if (!displayTelemetry.pollDue(now, screenAwake)) return false;
   const bool connected = networkEnabled && WiFi.status() == WL_CONNECTED;
   return displayTelemetry.update(networkEnabled, connected,
-      connected ? WiFi.RSSI() : 0, M5.Power.getBatteryLevel());
+      connected ? WiFi.RSSI() : 0,
+      bootswitch::preparePowerAccess() ? M5.Power.getBatteryLevel() : -1);
 }
 
 void drawDisplayTelemetry() {
@@ -522,6 +525,7 @@ void setup() {
   config.output_power = false;
   // A/B use direct GPIOs. The application never consumes the PMIC power key.
   config.pmic_button = false;
+  bootswitch::preparePowerController();
   M5.begin(config);
   // StickS3's status LED belongs to the PM1, not Power.setLed().
   M5.Power.M5pm1.setLedEnLevel(false);
@@ -534,6 +538,7 @@ void setup() {
       M5.Power.M5pm1.getBatteryCharge(&actualCharging) && actualCharging == wantCharging) {
     batteryChargingEnabled = actualCharging ? 1 : 0;
   } else problem = "Battery charge setup failed";
+  powerControllerSleep = bootswitch::enablePowerControllerSleep();
   M5.BtnB.setHoldThresh(1500);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(60);
@@ -554,7 +559,8 @@ void loop() {
       else {
         // M5PM1 SYS_CMD: key 0xA + command 3 = download, like the reset key hold.
         // No NVS write: "flash" is an action, never a saved OS selection.
-        const bool sent = M5.Power.M5pm1.writeRegister8(0x0C, 0xA3);
+        const bool sent = bootswitch::preparePowerAccess() &&
+                          M5.Power.M5pm1.writeRegister8(0x0C, 0xA3);
         if (sent) delay(500);
         restartPending = RestartAction::None;
         problem = "Could not enter flash mode";
