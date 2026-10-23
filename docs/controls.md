@@ -47,6 +47,7 @@ is unavailable, use the displayed IP or reserve a DHCP address.
 | `POST /api/mode`, `mode=linux` or `mode=windows` | Set the next boot selection. |
 | `POST /api/toggle` | Toggle the selection. |
 | `GET /api/usb` | Read USB configuration, suspend and wake-permission status. |
+| `GET /api/power` | Read CPU, display and radio power-saving status. |
 | `POST /api/wake` | Request [PC wake from sleep](usb-wake.md). |
 | `POST /api/mode`, `mode=flash` | Enter [download mode](firmware.md#enter-download-mode-remotely) when enabled in the build. |
 
@@ -71,6 +72,19 @@ The browser uses HTTP Digest authentication. The API and page use HTTP on your
 LAN; HTTP is unencrypted and bearer tokens can be observed on that network. Use
 a trusted LAN or VPN, without forwarding this service to the public Internet.
 Wi-Fi connects/reconnects independently of USB; no network is needed to boot.
+
+`GET /api/power` requires the same authentication and does not wake the screen or
+extend its timer. It returns `cpu_mhz`, `apb_hz`, `display_awake`,
+`display_idle_ms`, `wifi_connected`, `wifi_sleep` (`0` none, `1` DTIM modem sleep,
+`2` maximum modem sleep, `-1` unavailable), `ble_active`, `ble_modem_sleep`,
+`ble_sleeping`, `pmic_idle_sleep`, and `battery_charging_enabled`. The modem/PMIC
+configuration flags describe enabled power-saving modes; `ble_sleeping` is an
+instantaneous controller sample. `battery_charging_enabled` is the charger-enable
+state confirmed at startup, or `null` if setup failed; it does not indicate
+whether current is flowing into the battery. Reading the diagnostics does not
+poll or wake the PM1.
+The associated radio is identified by `wifi_bssid`, `wifi_channel` and
+`wifi_rssi_dbm`; all three are `null` when no AP is associated.
 
 ## Bluetooth LE
 

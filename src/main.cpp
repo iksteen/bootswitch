@@ -8,6 +8,8 @@
 #include <ESPmDNS.h>
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
+#include <esp_bt.h>
+#include <esp32-hal-cpu.h>
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -16,6 +18,7 @@
 #include "device/dcd.h"
 #include "boot_disk.h"
 #include "ble_control.h"
+#include "ble_power.h"
 #include "board_power.h"
 #include "settings.h"
 #include "virtual_disk.h"
@@ -406,6 +409,32 @@ void startNetwork() {
         (status.configured ? "true" : "false") + ",\"suspended\":" +
         (status.suspended ? "true" : "false") + ",\"remote_wakeup_enabled\":" +
         (status.remoteWakeEnabled ? "true}" : "false}"));
+  });
+  server.on("/api/power", HTTP_GET, [] {
+    if (!authenticate()) return;
+    wifi_ps_type_t wifiSleep = WIFI_PS_NONE;
+    const bool haveWifiSleep = esp_wifi_get_ps(&wifiSleep) == ESP_OK;
+    wifi_ap_record_t ap{};
+    const bool haveAp = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    char apAddress[18] = {};
+    if (haveAp) std::snprintf(apAddress, sizeof(apAddress), "%02x:%02x:%02x:%02x:%02x:%02x",
+        ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", String("{\"cpu_mhz\":") + getCpuFrequencyMhz() +
+        ",\"apb_hz\":" + getApbFrequency() +
+        ",\"display_awake\":" + (screenAwake ? "true" : "false") +
+        ",\"display_idle_ms\":" + uint32_t(millis() - lastDisplayActivity) +
+        ",\"wifi_connected\":" + (WiFi.status() == WL_CONNECTED ? "true" : "false") +
+        ",\"wifi_bssid\":" + (haveAp ? String("\"") + apAddress + "\"" : "null") +
+        ",\"wifi_channel\":" + (haveAp ? String(ap.primary) : "null") +
+        ",\"wifi_rssi_dbm\":" + (haveAp ? String(ap.rssi) : "null") +
+        ",\"wifi_sleep\":" + (haveWifiSleep ? int(wifiSleep) : -1) +
+        ",\"ble_active\":" + (bootswitch::bleActive() ? "true" : "false") +
+        ",\"pmic_idle_sleep\":" + (powerControllerSleep ? "true" : "false") +
+        ",\"battery_charging_enabled\":" + (batteryChargingEnabled < 0 ? "null" :
+                                            (batteryChargingEnabled ? "true" : "false")) +
+        ",\"ble_modem_sleep\":" + (bootswitch::bleActive() && bootswitch::bleModemSleepConfigured() ? "true" : "false") +
+        ",\"ble_sleeping\":" + (bootswitch::bleActive() && esp_bt_controller_is_sleeping() ? "true}" : "false}"));
   });
   server.on("/api/wake", HTTP_POST, [] {
     if (!authorizeChange()) return;

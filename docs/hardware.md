@@ -51,9 +51,44 @@ the linker wrapper in [ble_power.cpp](../src/ble_power.cpp). A compile-time guar
 requires review when changing ESP-IDF or the target. See
 [Espressif's Bluetooth sleep configuration](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/kconfig.html#config-bt-ctrl-modem-sleep).
 
-A battery-disconnected StickS3 measured a stable **0.132 W** with the display,
-Wi-Fi, BLE and status LED off. This measurement does not cover operation with
-either radio enabled.
+Measurements with an FNB-58 at the USB input on an intact StickS3, battery
+connected but charging disabled, USB data connected, display asleep and status
+LED off:
+
+| Radio configuration | Average input power | HTTP response time |
+| --- | --- | --- |
+| Neither radio | **0.141 W** | — |
+| BLE advertising, no client | **0.150 W** | — |
+| BLE connected, idle | **0.193 W** | — |
+| Wi-Fi only, default listen interval | **0.343–0.344 W** | **91–95 ms** |
+| Wi-Fi only, listen interval 3 | **0.260 W** | **180 ms** |
+| Wi-Fi only, listen interval 10 | **0.188 W** | **439 ms** |
+| Wi-Fi associated and BLE advertising, default interval | **0.285 W** | Intermittent timeouts |
+| Wi-Fi associated and BLE connected, default interval | **0.307 W** | Intermittent timeouts |
+
+These are 60-second averages, or 120 seconds for connected BLE, at 80 MHz.
+HTTP times are means of six requests after each quiet measurement; both default
+Wi-Fi-only runs passed all six. The authenticated BLE read after each connected
+idle measurement passed. The combined-radio cases showed Wi-Fi stalls, so their
+lower consumption does not establish a usable power-saving configuration.
+The stalls also occurred in comparison builds with Bluetooth modem sleep
+disabled, with a 240 MHz CPU, with Bluetooth initialized before Wi-Fi, and with
+the radio tasks on separate cores. They also reproduced after 75 seconds of
+idle time with both Bluetooth and PM1 sleep disabled and the default NimBLE
+advertising interval. An immediate post-startup request check does not establish
+sustained responsiveness.
+A Wi-Fi-sleep-disabled comparison rebooted before measurement; it provides no
+valid power or link-stability result.
+On a TP-Link Deco mesh, both test units exhibited timeouts on one radio and
+passed all 12 post-idle probes each on another radio with the same power policy.
+The original unit reproduced the timeouts when switched back while the reference
+unit remained responsive. Access-point selection can therefore matter even with
+a strong signal; see [BSSID selection](configuration.md#choosing-a-mesh-access-point).
+
+With both radios enabled and the display continuously on, input power averaged
+**0.331 W**; Wi-Fi timeouts also occurred in that configuration. Power depends on
+network traffic, signal quality and the access point. These USB-input tests do
+not measure battery discharge, usable capacity or runtime.
 
 ## USB disk and boot timing
 

@@ -83,6 +83,26 @@ def main():
         page = call("GET", "/", 200, auth=HTTPDigestAuth("admin", password))
         assert "<title>BootSwitch</title>" in page.text
         print("Unauthenticated/invalid requests rejected; browser Digest login works.", flush=True)
+        call("GET", "/api/power", 401)
+        call("GET", "/api/power", 401,
+             headers={"Authorization": "Bearer deliberately-invalid-test-token"})
+        power = call("GET", "/api/power", 200, headers=authorized)
+        assert power.headers.get("Cache-Control") == "no-store"
+        status = power.json()
+        assert status["cpu_mhz"] == 80 and status["apb_hz"] == 80000000
+        assert isinstance(status["display_idle_ms"], int)
+        assert status["wifi_sleep"] in (0, 1, 2, -1)
+        for field in ("display_awake", "wifi_connected", "ble_active",
+                      "ble_modem_sleep", "ble_sleeping", "pmic_idle_sleep",
+                      "battery_charging_enabled"):
+            assert type(status[field]) is bool, f"Invalid power field: {field}"
+        assert status["wifi_connected"] is True
+        assert isinstance(status["wifi_bssid"], str) and len(status["wifi_bssid"]) == 17
+        assert isinstance(status["wifi_channel"], int) and 1 <= status["wifi_channel"] <= 14
+        assert isinstance(status["wifi_rssi_dbm"], int)
+        if values.get("wifi_bssid"):
+            assert status["wifi_bssid"].lower() == values["wifi_bssid"].lower()
+        print("Power diagnostics require authentication and report live CPU/radio state.", flush=True)
         call("GET", "/api/toggle", 404, headers=authorized)
         call("POST", "/api/mode", 403, headers=authorized, data={"mode": other})
         call("POST", "/api/mode", 400, headers=mutation, data={"mode": "invalid"})

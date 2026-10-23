@@ -52,7 +52,8 @@ variants under their distinct filenames.
 
 Each build explicitly applies its charging policy at startup and reads it back
 from the PM1. Installing production firmware after a measurement build restores
-charging.
+charging. The authenticated [power diagnostics](controls.md#wi-fi-and-http-api)
+report the confirmed startup state.
 
 With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
 400 and BLE `flash` is ignored. With USB updates disabled, FIRMWARE.BIN is an
@@ -104,9 +105,9 @@ ptrace-based sandbox, use
 BLE command tests cover remote flash both enabled and disabled. Firmware feature
 checks inspect both binaries and verify that the production package excludes
 remote download entry, the firmware file parser, and OTA write/activation code.
-
 Bluetooth power-adapter tests check initialization defaults, preservation of
-explicit caller settings, and propagation of controller errors.
+explicit caller settings, and propagation of controller errors. The live HTTP
+checks also verify authenticated power diagnostics and the CPU/APB clocks.
 
 The EFI integration test boots the **real systemd-boot** in QEMU/OVMF, with the
 generated disk attached as USB mass storage. Test payloads report the selected

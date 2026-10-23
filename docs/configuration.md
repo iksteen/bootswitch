@@ -60,7 +60,9 @@ pairing and commands.
 ## Choosing a mesh access point
 
 `wifi_bssid` can pin a stationary Stick to one radio in a mesh network. Use the
-radio's BSSID, which can differ from the node's printed hardware MAC.
+radio's BSSID, which can differ from the node's printed hardware MAC. The
+authenticated `/api/power` response reports the current `wifi_bssid`,
+`wifi_channel` and `wifi_rssi_dbm` to identify the active radio.
 
 With a pin set, the Stick scans for that BSSID across channels, so an AP channel
 change does not require editing the setting. It will not fail over to a different
@@ -70,7 +72,8 @@ selection. Use distinct hostnames when running several BootSwitch units.
 ## Wi-Fi power saving
 
 `wifi_listen_interval=0` uses modem sleep following the access point's DTIM
-interval. Values `1` through `10` select maximum modem sleep and specify how
+interval; it does not disable Wi-Fi modem sleep. Values `1` through `10`
+select maximum modem sleep and specify how
 many AP beacon intervals to wait between receives. With a typical 102.4 ms
 beacon interval, `10` is approximately one second.
 
