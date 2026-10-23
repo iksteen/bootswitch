@@ -50,6 +50,56 @@ A battery-disconnected StickS3 measured a stable **0.132 W** with the display,
 Wi-Fi, BLE and status LED off. This measurement does not cover operation with
 either radio enabled.
 
+## Downloads and automated builds
+
+Download prebuilt binaries from [GitHub Releases](https://github.com/iksteen/bootswitch/releases):
+
+| Asset | Purpose |
+| --- | --- |
+| `bootswitchx64.efi` | x86-64 EFI bridge; install using the systemd-boot instructions below. |
+| `bootswitch-sticks3-flash.zip` | Complete production installation package; remote flash and USB firmware updates disabled. |
+| `bootswitch-sticks3.bin` | Production application image only. |
+| `bootswitch-sticks3-dev-flash.zip` | Complete development installation package; remote flash and USB firmware updates enabled. |
+| `bootswitch-sticks3-dev.bin` | Development application image only. |
+| `SHA256SUMS` | SHA-256 hashes of all five release downloads. |
+
+Both flash ZIPs contain the bootloader, partition table, application, flash
+arguments, instructions, build feature flags, and checksums. Application-only
+images can be flashed at `0x10000` with the matching bootloader and partition
+table installed, or installed through the USB disk when the running firmware
+enables that feature.
+
+To install the firmware, extract the flash ZIP and open a terminal in its
+directory. Install `esptool==4.9.0` in a Python environment, put the StickS3 in
+download mode as described below, then run:
+
+```sh
+python -m pip install esptool==4.9.0
+python -m esptool --port /dev/ttyACM0 @flash_args
+```
+
+Replace the port with the one on your machine (`COM5`, for example, on Windows).
+The supplied arguments use a watchdog reset to start the application afterward.
+The package writes separate images at the build's actual upload offsets, leaving
+the NVS settings partition intact. Do not erase the flash before updating and do
+not flash the application-only binary at address zero.
+
+[GitHub Actions](https://github.com/iksteen/bootswitch/actions/workflows/build.yml)
+builds EFI and both firmware variants on branch pushes, pull requests, and manual runs. The EFI
+job runs the native tests and boots the EFI bridge with systemd-boot in QEMU/OVMF;
+the firmware job builds and packages the pinned production and development
+environments. Successful jobs upload separate EFI, production firmware and
+development firmware artifacts, retained for 30 days.
+
+Pushing a version tag such as `v0.1.0` runs those same builds and tests, then
+publishes a GitHub Release with the EFI binary, both firmware variants and their
+flash ZIPs, and checksums.
+Tags containing a hyphen, such as `v0.1.0-rc.1`, produce prereleases. Publishing
+uses the repository's automatic `GITHUB_TOKEN`; no additional secrets are needed.
+Only the publish job has release write permission. All action dependencies are
+pinned to commit SHAs of their current releases, with weekly Dependabot checks
+for updates.
+
 ## Build and flash the StickS3
 
 Install [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html)
@@ -60,6 +110,10 @@ or use its VS Code extension. The toolchain and M5 libraries are pinned in
 pio run
 # Configure Wi-Fi and the API key through CONFIG.INI after flashing.
 ```
+
+To build the same firmware downloads as CI, run `pio run --environment sticks3
+--target release`. The application binary and flash ZIP are written to
+`build/release/`.
 
 The local environment created during development can also be used:
 
@@ -83,9 +137,9 @@ The side reset/power button is **not** the mode toggle; use the front A button.
 
 ### Optional development features
 
-The default **sticks3** build disables remote download-mode entry and USB-disk
-firmware updates. Both are independent compile-time options and cannot be
-enabled through CONFIG.INI:
+The default **sticks3** build and production release firmware disable remote
+download-mode entry and USB-disk firmware updates. Both are compile-time options,
+independent of each other, and cannot be enabled through CONFIG.INI:
 
 | Build flag | Default | Enables |
 | --- | --- | --- |
@@ -97,9 +151,14 @@ that feature. The **sticks3-dev** environment enables both:
 
 ```sh
 pio run --environment sticks3-dev
+pio run --environment sticks3-dev --target release
 ```
 
-Its application is `.pio/build/sticks3-dev/firmware.bin`.
+Its application is `.pio/build/sticks3-dev/firmware.bin`. Development release
+files are named `bootswitch-sticks3-dev.bin` / `bootswitch-sticks3-dev-flash.zip`
+under `build/release/sticks3-dev/`, separate from production artifacts. Each ZIP
+includes BUILD_INFO.txt with its feature flags. CI checks and publishes both
+variants under their distinct filenames.
 
 With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
 400 and BLE `flash` is ignored. With USB updates disabled, FIRMWARE.BIN is an
@@ -109,13 +168,13 @@ mode in either build.
 
 ### Update through the USB disk
 
-Requires `BOOTSWITCH_ENABLE_USB_UPDATE=1` in the **running** firmware. Copy
-`.pio/build/sticks3-dev/firmware.bin` (or the production application from
-`.pio/build/sticks3/firmware.bin`) to the root of **BOOTSWITCH** as
-**FIRMWARE.BIN**, then safely eject the drive:
+Requires `BOOTSWITCH_ENABLE_USB_UPDATE=1` in the **running** firmware. Copy the
+raw application binary (`bootswitch-sticks3.bin` from a release, or
+`.pio/build/sticks3/firmware.bin` from a local build) to the root of **BOOTSWITCH**
+as **FIRMWARE.BIN**, then safely eject the drive:
 
 ```sh
-cp .pio/build/sticks3-dev/firmware.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
+cp bootswitch-sticks3.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
 gio mount --eject "/run/media/$USER/BOOTSWITCH"
 ```
 
@@ -133,7 +192,7 @@ disk is rebuilt at startup, so FIRMWARE.BIN is not reapplied on later ejects.
 
 Use the application `.bin`, rather than the ZIP, EFI binary or a merged flash
 image. USB-disk updates do not replace the bootloader or partition table; use
-serial flashing when those need updating. Image validation does not
+the complete flash package when those need updating. Image validation does not
 test the new application's behavior; the physical reset/power button remains
 available for recovery through the ROM download mode. Anyone with write access
 to this USB disk can install firmware while this development feature is enabled.
@@ -603,6 +662,10 @@ OS may show stale boot-file contents; use the Wi-Fi API for live status.
 make test
 # GNU-EFI, QEMU, OVMF, installed systemd-boot EFI binary:
 python3 tests/check_efi.py
+# Production package, development firmware, and compiled feature checks:
+pio run --environment sticks3 --target release
+pio run --environment sticks3-dev --target release
+python3 tests/check_firmware_features.py
 ```
 
 The native checks exercise full/partial/cross-sector reads and writes, settings
@@ -611,6 +674,10 @@ tools also test overwriting CONFIG.INI and replacing it via a temporary file and
 rename, including a multi-cluster configuration. `fsck.fat` and `mtype` independently validate both generated
 filesystems. If running under a ptrace-based sandbox, use
 `ASAN_OPTIONS=detect_leaks=0 make test` (LeakSanitizer cannot run under ptrace).
+
+BLE command tests cover remote flash both enabled and disabled. Firmware feature
+checks inspect both binaries and verify that the production package excludes
+remote download entry, the firmware file parser, and OTA write/activation code.
 
 The EFI integration test boots the **real systemd-boot** in QEMU/OVMF, with the
 generated disk attached as USB mass storage. Test payloads report the selected
