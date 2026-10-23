@@ -56,7 +56,12 @@ bool redraw = true;
 const char* problem = nullptr;
 uint32_t lastRetry = 0;
 uint32_t restartAt = 0;
-bool restartPending = false;
+enum class RestartAction { None, Application
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+  , Flash
+#endif
+};
+RestartAction restartPending = RestartAction::None;
 bool screenAwake = true;
 uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
@@ -121,6 +126,7 @@ const char* modeName(Mode mode) {
 }
 
 bool setMode(Mode mode) {
+  if (restartPending != RestartAction::None) return false;
   wakeDisplay();
   if (mode == selected.load()) return true;
   if (!storageReady || preferences.putUChar("mode", uint8_t(mode)) != 1) {
@@ -168,7 +174,7 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
 
 
 void applyConfiguration() {
-  if (!ramDiskReady || restartPending) return;
+  if (!ramDiskReady || restartPending != RestartAction::None) return;
   wakeDisplay();
   diskEjected.store(true);
   disk.mediaPresent(false);
@@ -191,10 +197,22 @@ void applyConfiguration() {
   redraw = true;
   if (!error) {
     restartAt = millis() + 500;
-    restartPending = true;
+    restartPending = RestartAction::Application;
   }
 }
 
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+bool requestFlash() {
+  if (restartPending != RestartAction::None || !M5.Power.M5pm1.isEnabled()) return false;
+  wakeDisplay();
+  problem = "Entering flash mode";
+  redraw = true;
+  // Let the HTTP/ATT response reach the client before disconnecting USB/radios.
+  restartAt = millis() + 500;
+  restartPending = RestartAction::Flash;
+  return true;
+}
+#endif
 
 const char kPage[] PROGMEM = R"HTML(<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -248,6 +266,10 @@ bool authorizeChange() {
   // granted, so third-party pages cannot submit authenticated mutations.
   if (server.header("X-Bootswitch") != "1") {
     server.send(403, "text/plain", "X-Bootswitch: 1 required");
+    return false;
+  }
+  if (restartPending != RestartAction::None) {
+    server.send(409, "text/plain", "Device restarting");
     return false;
   }
   return true;
@@ -307,8 +329,20 @@ void startNetwork() {
   server.on("/api/mode", HTTP_POST, [] {
     if (!authorizeChange()) return;
     const String value = server.arg("mode");
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+    if (value == "flash") {
+      server.sendHeader("Cache-Control", "no-store");
+      if (requestFlash()) server.send(202, "application/json", "{\"flash_requested\":true}");
+      else server.send(503, "application/json", "{\"error\":\"Flash control unavailable\"}");
+      return;
+    }
+#endif
     if (value != "linux" && value != "windows") {
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+      server.send(400, "text/plain", "mode must be linux, windows or flash");
+#else
       server.send(400, "text/plain", "mode must be linux or windows");
+#endif
       return;
     }
     changeMode(value == "windows" ? Mode::Windows : Mode::Linux);
@@ -463,7 +497,28 @@ void setup() {
 void loop() {
   M5.update();
   if (usbWakeRequested.exchange(false, std::memory_order_relaxed)) wakeDisplay();
-  if (restartPending && int32_t(millis() - restartAt) >= 0) ESP.restart();
+  if (restartPending != RestartAction::None) {
+    if (int32_t(millis() - restartAt) >= 0) {
+      if (restartPending == RestartAction::Application) ESP.restart();
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+      else {
+        // M5PM1 SYS_CMD: key 0xA + command 3 = download, like the reset key hold.
+        // No NVS write: "flash" is an action, never a saved OS selection.
+        const bool sent = M5.Power.M5pm1.writeRegister8(0x0C, 0xA3);
+        if (sent) delay(500);
+        restartPending = RestartAction::None;
+        problem = "Could not enter flash mode";
+        redraw = true;
+      }
+#endif
+    }
+    if (restartPending != RestartAction::None) {
+      if (apiEnabled) server.handleClient();
+      if (redraw && screenAwake) drawScreen();
+      delay(20);
+      return;
+    }
+  }
   if (M5.BtnB.wasPressed()) wakeDisplay();
   if (M5.BtnB.wasClicked()) wakeHost();
   if (applyRequested.exchange(false) || M5.BtnB.wasHold()) applyConfiguration();
@@ -473,6 +528,12 @@ void loop() {
     else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
   }
   const BleCommand command = bootswitch::nextBleCommand();
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+  if (command == BleCommand::Flash) {
+    if (!requestFlash()) { problem = "Flash control unavailable"; redraw = true; }
+  }
+  else
+#endif
   if (command == BleCommand::Wake) wakeHost();
   else if (command != BleCommand::None) {
     const Mode mode = command == BleCommand::Toggle ?

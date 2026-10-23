@@ -6,6 +6,9 @@ namespace bootswitch {
 BleCommand parseBleCommand(const uint8_t* bytes, size_t length) {
   if (!bytes) return BleCommand::None;
   if (length == 4 && std::memcmp(bytes, "wake", 4) == 0) return BleCommand::Wake;
+#if BOOTSWITCH_ENABLE_REMOTE_FLASH
+  if (length == 5 && std::memcmp(bytes, "flash", 5) == 0) return BleCommand::Flash;
+#endif
   if (length == 5 && std::memcmp(bytes, "linux", 5) == 0) return BleCommand::Linux;
   if (length == 7 && std::memcmp(bytes, "windows", 7) == 0) return BleCommand::Windows;
   if (length == 6 && std::memcmp(bytes, "toggle", 6) == 0) return BleCommand::Toggle;

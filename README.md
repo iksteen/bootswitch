@@ -81,6 +81,41 @@ in download mode. The application presents mass storage only, so the serial
 upload port disappears during normal use. Re-enter download mode to flash again.
 The side reset/power button is **not** the mode toggle; use the front A button.
 
+### Optional development features
+
+The default **sticks3** build disables remote download-mode entry. Set the
+compile-time flag `BOOTSWITCH_ENABLE_REMOTE_FLASH=1` in `build_flags`, or use the
+**sticks3-dev** environment to enable API `mode=flash` and BLE `flash`:
+
+```sh
+pio run --environment sticks3-dev
+```
+
+Its application is `.pio/build/sticks3-dev/firmware.bin`. This feature cannot be
+enabled through CONFIG.INI. When disabled, authenticated API `mode=flash` is
+rejected with HTTP 400 and BLE `flash` is ignored. The physical reset/power button
+provides download mode in either build.
+
+### Enter download mode remotely
+
+Requires `BOOTSWITCH_ENABLE_REMOTE_FLASH=1` in the running firmware.
+
+Send an authenticated `POST /api/mode` with `mode=flash` and `X-Bootswitch: 1`,
+or write exact ASCII `flash` to the paired BLE command characteristic. For
+example, with `BOOTSWITCH_TOKEN` set to your API key:
+
+```sh
+curl -X POST -H "Authorization: Bearer $BOOTSWITCH_TOKEN" \
+  -H 'X-Bootswitch: 1' --data 'mode=flash' http://bootswitch.local/api/mode
+```
+
+HTTP returns **202** with `{"flash_requested":true}` before the Stick enters
+download mode. This is a one-time action: the saved selection remains `linux`
+or `windows`. The USB disk, HTTP server and BLE service disconnect, and the ROM
+serial upload port appears. Flash using the serial workflow above, or briefly
+press reset to return to the installed application. Eject/apply any pending USB
+settings edits before requesting download mode; unsaved RAM-disk edits are lost.
+
 Firmware builds contain no credentials and do not read a secrets header. On
 first boot, Wi-Fi credentials and the API key are empty, so **Wi-Fi and HTTP/API
 are disabled**. Configure them through `CONFIG.INI`; validated edits are retained
@@ -359,6 +394,7 @@ In [BLESPloit's GATT browser](https://blesplo.it/docs/mobile/connections/):
 | `linux` | `6c 69 6e 75 78` |
 | `windows` | `77 69 6e 64 6f 77 73` |
 | `wake` | `77 61 6b 65` |
+| `flash` (requires `BOOTSWITCH_ENABLE_REMOTE_FLASH=1`) | `66 6c 61 73 68` |
 
 | Characteristic | UUID | Access |
 | --- | --- | --- |
@@ -372,6 +408,8 @@ Read the state characteristic after processing or subscribe to its notifications
 to confirm the saved result. Physical buttons and Wi-Fi changes update it too.
 The `wake` command requests USB wake without changing the saved mode; its outcome
 appears on the display, and USB permission can be inspected with GET `/api/usb`.
+When enabled in the build, `flash` enters ROM download mode after acknowledging
+the write; it disconnects BLE and USB storage without changing the saved mode.
 BLE mode commands wake the screen and restart its configured timer; scanning,
 connecting, and reading the state do not. For automation, explicit `linux` and
 `windows` commands are safe to retry; `toggle` can toggle twice if repeated.

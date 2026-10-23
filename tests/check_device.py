@@ -86,6 +86,11 @@ def main():
         call("GET", "/api/toggle", 404, headers=authorized)
         call("POST", "/api/mode", 403, headers=authorized, data={"mode": other})
         call("POST", "/api/mode", 400, headers=mutation, data={"mode": "invalid"})
+        call("POST", "/api/mode", 401, data={"mode": "flash"})
+        call("POST", "/api/mode", 401,
+             headers={"Authorization": "Bearer deliberately-invalid-test-token", "X-Bootswitch": "1"},
+             data={"mode": "flash"})
+        call("POST", "/api/mode", 403, headers=authorized, data={"mode": "flash"})
         verify_mode(original)
         print("GET, missing change header, and invalid mode cannot change the selection.", flush=True)
         if args.check_usb_wake:
