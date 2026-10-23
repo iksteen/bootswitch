@@ -2,8 +2,9 @@
 
 Select Linux or Windows with the StickS3's **front A button**, a Wi-Fi web page,
 an HTTP API, or optional Bluetooth LE. The display shows the saved choice.
-Selection survives power loss and applies when your PC next reads the device during boot. This does not
-power on, restart, or switch a running PC into another OS.
+Selection survives power loss and applies when your PC next reads the device
+during boot. This does not restart or switch a running PC into another OS.
+USB remote wake can resume a sleeping PC when the host supports and permits it.
 
 Inspired by Stephen Holdaway's [Hardware boot selection switch](https://hackaday.io/project/179539-hardware-boot-selection-switch).
 This is a new ESP32-S3 implementation with two PC integration options:
@@ -149,6 +150,8 @@ A reboot that leaves the USB connection untouched cannot be detected this way.
 Routine disk access, web-page polling, and Wi-Fi reconnection do not wake the
 display or extend its timer. The side B user button also wakes it; holding B still
 applies USB settings after flushing and unmounting the disk.
+Briefly pressing and releasing B additionally requests that the PC wake from
+sleep. Holding B does not issue this wake request.
 
 Visit `http://bootswitch.local/` or the IP shown on screen. Sign in as **admin**
 using the `api_key` from CONFIG.INI. The page offers Linux, Windows, and Toggle controls.
@@ -177,6 +180,128 @@ LAN; HTTP is unencrypted and bearer tokens can be observed on that network. Use
 a trusted LAN or VPN, without forwarding this service to the public Internet.
 Wi-Fi connects/reconnects independently of USB; no network is needed to boot.
 
+## Wake the PC over USB
+
+The device presents USB mass storage **and a passive HID keyboard interface**.
+The keyboard interface lets the host OS offer its normal USB wake permissions.
+Wake uses USB remote-resume signaling; the firmware does not send keyboard input.
+
+Three controls request the same wake action, without changing the saved boot mode:
+
+- Briefly press and release the **side B user button**, even with the display off.
+  Holding B for 1.5 seconds still applies USB settings after flush/unmount.
+- Use **Wake PC from sleep** on the web page, or send `POST /api/wake` with the
+  same authentication and `X-Bootswitch: 1` header as a mode change.
+- Write ASCII `wake` to the existing BLE command characteristic after pairing.
+
+For example, with `BOOTSWITCH_TOKEN` set to your API key:
+
+```sh
+curl -X POST -H "Authorization: Bearer $BOOTSWITCH_TOKEN" \
+  -H 'X-Bootswitch: 1' http://bootswitch.local/api/wake
+
+curl -H "Authorization: Bearer $BOOTSWITCH_TOKEN" \
+  http://bootswitch.local/api/usb
+```
+
+A successful request returns HTTP 200 and `{"wake_requested":true}`. This means
+the USB resume signal was requested, not that the PC has confirmed waking.
+HTTP 409 means the USB bus is not suspended or the host has not armed remote
+wake; HTTP 503 means USB is not configured by a connected host. The display also
+shows the result. GET `/api/usb` reports `configured`, `suspended`, and
+`remote_wakeup_enabled`; the last field reflects the host permission reported at
+the current suspend. Polling it does not wake the display or the PC.
+
+USB suspend also happens during runtime power saving, so it does not prove that
+the whole PC is asleep. Wake commands are explicit: choosing Linux/Windows or
+toggling the saved mode never automatically wakes the PC.
+
+The host must arm USB remote wake **before** suspending, and its firmware,
+USB controller, and any intervening hub must permit USB wake. Enable USB keyboard
+wake in UEFI/BIOS if needed. The feature targets sleep; shutdown and hibernation
+wake support depend on the PC. See the [Linux USB power-management documentation](https://cdn.kernel.org/doc/html/latest/driver-api/usb/power-management.html)
+and [Microsoft's HID power-management documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/hid/power-management).
+
+Wake permissions are configured separately in each OS; enabling them in Linux
+does not enable them in Windows.
+
+### Linux wake permission
+
+Install the Python 3 helper and its udev rule from the repository directory:
+
+```sh
+sudo install -D -m 0755 host/bootswitch_usb_wake.py /usr/local/libexec/bootswitch-usb-wake
+sudo install -m 0644 host/99-bootswitch-wakeup.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo /usr/local/libexec/bootswitch-usb-wake
+```
+
+The last command applies permissions immediately to connected BootSwitches;
+reloading udev alone does not apply rules to an already-connected device. On
+each later USB add/change event, including insertion, re-enumeration and boot,
+the rule passes the application's current sysfs path to the helper. It matches
+the application's USB product name and IDs, excluding the ROM download mode.
+
+The helper resolves that device's **actual parent chain**, enabling supported
+`power/wakeup` attributes on the StickS3, upstream hubs, root hub, and controller
+ancestors. It discovers them again on each event, so bus numbers, USB ports and
+hub depth can change without editing rules. Unsupported attributes are skipped.
+Enabled ancestor permissions remain enabled after unplugging the StickS3.
+
+Inspect the current chain without changing settings; this does not need root:
+
+```sh
+/usr/local/libexec/bootswitch-usb-wake --check
+```
+
+Each supported node should report `enabled`; `--check` exits nonzero if a
+permission is disabled or no BootSwitch application is found. Verify after
+rebooting too, since another power-management tool may override the settings.
+If necessary, rerun `sudo /usr/local/libexec/bootswitch-usb-wake` while the PC is
+awake, before suspending it.
+
+The earlier `99-bootswitch-parent-wakeup.rules` example used fixed port names
+and is superseded by this helper. If you installed it, remove that specific
+file from `/etc/udev/rules.d/` and reload the rules; no generated files under
+`build/` are needed for installation.
+
+### Windows wake permission
+
+1. Open **Device Manager → Keyboards**.
+2. Find the StickS3's **HID Keyboard Device**. Unplug/reconnect the StickS3 to
+   identify which entry disappears and returns; several keyboards may have the
+   same display name.
+3. Open that device's **Properties → Power Management**.
+4. Enable **Allow this device to wake the computer**, then apply the change.
+
+In an **administrator terminal**, verify that the keyboard is armed:
+
+```powershell
+powercfg /devicequery wake_armed
+```
+
+If it is absent, list devices whose wake permission Windows allows configuring:
+
+```powershell
+powercfg /devicequery wake_programmable
+```
+
+If the Power Management tab is missing or the device cannot be armed, inspect
+the available sleep states with `powercfg /a` and check the PC's USB/firmware
+wake support. See [Microsoft's powercfg reference](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options#devicequery).
+
+### Test wake from sleep
+
+After enabling the host's wake permissions, put the PC into **Sleep**, then
+briefly press B or send BLE `wake` / `POST /api/wake` from another device.
+The saved Linux/Windows selection should stay unchanged. GET `/api/usb` can
+diagnose host permission while suspended: `remote_wakeup_enabled` should be
+`true` once the host has armed wake and suspended the device. It is `false` while
+the USB bus is active, even if the OS is configured to allow wake on its next
+suspend. HTTP 200 confirms only that a wake signal was requested; confirm the
+PC actually resumes. On Windows, `powercfg /lastwake` reports the most recent
+wake source.
+
 ## Optional BLE control
 
 Set `ble_passkey` in CONFIG.INI to your own six-digit PIN, save, and safely eject
@@ -202,6 +327,7 @@ In [BLESPloit's GATT browser](https://blesplo.it/docs/mobile/connections/):
 | `toggle` | `74 6f 67 67 6c 65` |
 | `linux` | `6c 69 6e 75 78` |
 | `windows` | `77 69 6e 64 6f 77 73` |
+| `wake` | `77 61 6b 65` |
 
 | Characteristic | UUID | Access |
 | --- | --- | --- |
@@ -213,6 +339,8 @@ Commands enter a bounded eight-command queue; excess writes are ignored. The BLE
 write response acknowledges receipt, before the firmware saves the selection.
 Read the state characteristic after processing or subscribe to its notifications
 to confirm the saved result. Physical buttons and Wi-Fi changes update it too.
+The `wake` command requests USB wake without changing the saved mode; its outcome
+appears on the display, and USB permission can be inspected with GET `/api/usb`.
 BLE mode commands wake the screen and restart its configured timer; scanning,
 connecting, and reading the state do not. For automation, explicit `linux` and
 `windows` commands are safe to retry; `toggle` can toggle twice if repeated.
@@ -315,6 +443,20 @@ To undo, remove `/etc/grub.d/01_bootswitch` and regenerate the configuration.
 
 ## USB behavior and timing
 
+The pinned Arduino ESP32 2.0.17 USB controller driver reports a bus suspend as
+`DCD_EVENT_UNPLUGGED` and resets its FIFO allocator. This loses the configuration
+and host wake permission, so a wake attempt incorrectly reports “USB host not
+connected.” BootSwitch builds a local copy in `src/vendor/dcd_esp32sx.c` instead
+of linking that driver from the framework archive. It reports suspend correctly,
+preserves the FIFO allocation, and enables the existing resume interrupt handler.
+Actual OTG session-end events still report a disconnect.
+
+The MIT-licensed driver comes from
+[esp32-arduino-lib-builder commit 3eb9cb0](https://github.com/espressif/esp32-arduino-lib-builder/blob/3eb9cb06afb534d37f47e98bca9f45e99126f81a/components/arduino_tinyusb/src/dcd_esp32sx.c).
+Its license is retained in the file. The build rejects a different Arduino core
+or TinyUSB minor version so this override is reviewed when dependencies change.
+See also the [upstream suspend/wake report](https://github.com/espressif/arduino-esp32/issues/10831).
+
 The device generates a **writable 4 MiB RAM disk** with an MBR and a valid FAT16
 partition, label `BOOTSWITCH`, UUID `B007-5E1E`. The label and UUID are unchanged
 from the original version, so the existing EFI bridge and GRUB snippet work
@@ -364,6 +506,8 @@ passed; both FAT disk images passed independent checks; all six EFI integration
 cases passed with systemd-boot 262.1 and OVMF 202608. The Wi-Fi build used example
 credentials for compilation only, without connecting to a network.
 
+Native tests also cover USB wake permission checks, the minimum idle guard,
+resume/disconnect races during that guard, and malformed BLE wake commands.
 Compilation and emulation cannot verify the StickS3's physical USB enumeration,
 buttons, Wi-Fi connectivity, display, battery operation, or your motherboard's
 USB initialization. Those need a test on the actual hardware before relying on
@@ -399,6 +543,10 @@ the following with the IP shown on the StickS3 and your actual mount path:
 .venv/bin/python tests/check_device.py --host DEVICE_IP \
   --usb-mode-file "/run/media/$USER/BOOTSWITCH/MODE.TXT"
 ```
+
+Add `--check-usb-wake` to verify the wake endpoints' authentication and refusal
+while the USB bus is active. This leaves the boot mode unchanged; it does not
+test waking a suspended PC, which needs a separate physical sleep/wake test.
 
 This reads the current key and hostname from the mounted CONFIG.INI, temporarily
 changes the mode, and restores it. You can also pass `--config-file PATH`; the

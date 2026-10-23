@@ -16,6 +16,7 @@
 #include "ble_control.h"
 #include "settings.h"
 #include "virtual_disk.h"
+#include "usb_wake.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
 #error "BootSwitch requires native USB OTG mode, with CDC on boot disabled"
@@ -25,6 +26,7 @@ using bootswitch::Mode;
 using bootswitch::Settings;
 using bootswitch::VirtualDisk;
 using bootswitch::BleCommand;
+using bootswitch::UsbWakeResult;
 
 namespace {
 USBMSC disk;
@@ -63,6 +65,19 @@ void wakeDisplay() {
     M5.Display.wakeup();
     redraw = true;
   }
+}
+
+UsbWakeResult wakeHost() {
+  wakeDisplay();
+  const auto result = bootswitch::requestUsbWake();
+  switch (result) {
+    case UsbWakeResult::Requested: problem = "USB wake requested"; break;
+    case UsbWakeResult::NotConfigured: problem = "USB host not connected"; break;
+    case UsbWakeResult::NotSuspended: problem = "USB host not suspended"; break;
+    case UsbWakeResult::NotEnabled: problem = "Host has not armed USB wake"; break;
+  }
+  redraw = true;
+  return result;
 }
 
 void loadSettings() {
@@ -147,6 +162,7 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
   return true;
 }
 
+
 void applyConfiguration() {
   if (!ramDiskReady || restartPending) return;
   wakeDisplay();
@@ -175,17 +191,30 @@ void applyConfiguration() {
   }
 }
 
+
 const char kPage[] PROGMEM = R"HTML(<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>BootSwitch</title>
 <style>body{font:18px system-ui;max-width:32em;margin:12vh auto;padding:1em;background:#14202b;color:#f2f5f8}button{font:inherit;padding:.7em 1em;margin:.3em .3em .3em 0;cursor:pointer}output{display:block;margin:1em 0;font-size:2em}p{line-height:1.5}</style>
 <h1>BootSwitch</h1><p>Selected for the next boot:</p><output id="mode">Loading…</output>
 <button data-mode="linux">Linux</button><button data-mode="windows">Windows</button><button data-mode="toggle">Toggle</button>
-<p>This changes the saved selection. Start or restart your PC to use it.</p><p id="status" role="status"></p>
+<p>This changes the saved selection. Start or restart your PC to use it.</p>
+<button data-mode="wake">Wake PC from sleep</button><p id="status" role="status"></p>
 <script>
 const mode=document.querySelector('#mode'),status=document.querySelector('#status');
 async function refresh(){try{const r=await fetch('/api/mode',{cache:'no-store'});if(!r.ok)throw Error('Read failed');const d=await r.json();mode.textContent=d.mode==='windows'?'Windows':'Linux';status.textContent=d.saved?'Selection saved':'Settings storage unavailable';}catch(e){status.textContent=e.message;}}
-document.querySelectorAll('button').forEach(b=>b.onclick=async()=>{document.querySelectorAll('button').forEach(x=>x.disabled=true);try{const action=b.dataset.mode;const r=await fetch(action==='toggle'?'/api/toggle':'/api/mode',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Bootswitch':'1'},body:action==='toggle'?'':'mode='+action});if(!r.ok)throw Error('Change failed ('+r.status+')');await refresh();}catch(e){status.textContent=e.message;}finally{document.querySelectorAll('button').forEach(x=>x.disabled=false);}});
+document.querySelectorAll('button').forEach(b=>b.onclick=async()=>{
+  document.querySelectorAll('button').forEach(x=>x.disabled=true);
+  try{
+    const action=b.dataset.mode,modeCommand=action!=='toggle'&&action!=='wake';
+    const r=await fetch(modeCommand?'/api/mode':'/api/'+action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Bootswitch':'1'},body:modeCommand?'mode='+action:''});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(d.error||'Request failed ('+r.status+')');
+    await refresh();
+    if(action==='wake')status.textContent='USB wake requested; host resume is not confirmed';
+  }catch(e){status.textContent=e.message;}
+  finally{document.querySelectorAll('button').forEach(x=>x.disabled=false);}
+});
 refresh();setInterval(refresh,3000);
 </script></html>)HTML";
 
@@ -267,6 +296,34 @@ void startNetwork() {
     if (authorizeChange()) changeMode(selected.load() == Mode::Linux ?
                                     Mode::Windows : Mode::Linux);
   });
+  server.on("/api/usb", HTTP_GET, [] {
+    if (!authenticate()) return;
+    const auto status = bootswitch::usbWakeStatus();
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", String("{\"configured\":") +
+        (status.configured ? "true" : "false") + ",\"suspended\":" +
+        (status.suspended ? "true" : "false") + ",\"remote_wakeup_enabled\":" +
+        (status.remoteWakeEnabled ? "true}" : "false}"));
+  });
+  server.on("/api/wake", HTTP_POST, [] {
+    if (!authorizeChange()) return;
+    const auto result = wakeHost();
+    server.sendHeader("Cache-Control", "no-store");
+    switch (result) {
+      case UsbWakeResult::Requested:
+        server.send(200, "application/json", "{\"wake_requested\":true}");
+        break;
+      case UsbWakeResult::NotConfigured:
+        server.send(503, "application/json", "{\"wake_requested\":false,\"error\":\"USB host not connected\"}");
+        break;
+      case UsbWakeResult::NotSuspended:
+        server.send(409, "application/json", "{\"wake_requested\":false,\"error\":\"USB host not suspended\"}");
+        break;
+      case UsbWakeResult::NotEnabled:
+        server.send(409, "application/json", "{\"wake_requested\":false,\"error\":\"Host has not armed USB wake\"}");
+        break;
+    }
+  });
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
 }
@@ -297,7 +354,7 @@ void drawScreen() {
   display.setTextSize(1);
   display.setTextColor(TFT_WHITE);
   display.setCursor(8, 62);
-  display.println(problem ? problem : "Button A: toggle");
+  display.println(problem ? problem : "A: toggle  B: wake PC");
   display.setCursor(8, 80);
   if (!usbReady) display.println("USB init failed");
   else display.println(ramDiskReady ? "CONFIG.INI: eject to apply" : "USB: boot selector");
@@ -341,7 +398,7 @@ void setup() {
   disk.onWrite(writeDisk);
   disk.onStartStop(startStopDisk);
   disk.mediaPresent(true);
-  usbReady = disk.begin(BootDisk::kSectorCount, BootDisk::kSectorSize);
+  usbReady = bootswitch::prepareUsbWake() && disk.begin(BootDisk::kSectorCount, BootDisk::kSectorSize);
   if (usbReady) usbReady = USB.begin();
 
   auto config = M5.config();
@@ -364,6 +421,7 @@ void loop() {
   if (usbWakeRequested.exchange(false, std::memory_order_relaxed)) wakeDisplay();
   if (restartPending && int32_t(millis() - restartAt) >= 0) ESP.restart();
   if (M5.BtnB.wasPressed()) wakeDisplay();
+  if (M5.BtnB.wasClicked()) wakeHost();
   if (applyRequested.exchange(false) || M5.BtnB.wasHold()) applyConfiguration();
   if (M5.BtnA.wasPressed()) {
     // A dark screen requires a separate wake press, avoiding a blind OS change.
@@ -371,7 +429,8 @@ void loop() {
     else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
   }
   const BleCommand command = bootswitch::nextBleCommand();
-  if (command != BleCommand::None) {
+  if (command == BleCommand::Wake) wakeHost();
+  else if (command != BleCommand::None) {
     const Mode mode = command == BleCommand::Toggle ?
         (selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux) :
         (command == BleCommand::Windows ? Mode::Windows : Mode::Linux);

@@ -31,6 +31,8 @@ def main():
                         help="Mounted MODE.TXT path, read with Linux O_DIRECT")
     parser.add_argument("--config-file", type=Path,
                         help="CONFIG.INI containing the current API key/hostname")
+    parser.add_argument("--check-usb-wake", action="store_true",
+                        help="Check wake API authentication and refusal while the USB host is active")
     args = parser.parse_args()
     config = args.config_file
     if not config and args.usb_mode_file:
@@ -86,6 +88,20 @@ def main():
         call("POST", "/api/mode", 400, headers=mutation, data={"mode": "invalid"})
         verify_mode(original)
         print("GET, missing change header, and invalid mode cannot change the selection.", flush=True)
+        if args.check_usb_wake:
+            call("GET", "/api/usb", 401)
+            call("POST", "/api/wake", 401)
+            call("POST", "/api/wake", 401,
+                 headers={"Authorization": "Bearer deliberately-invalid-test-token"})
+            call("POST", "/api/wake", 403, headers=authorized)
+            call("GET", "/api/wake", 404, headers=authorized)
+            verify_mode(original)
+            usb = call("GET", "/api/usb", 200, headers=authorized).json()
+            assert usb["configured"] is True and usb["suspended"] is False, "USB must be active for this test"
+            result = call("POST", "/api/wake", 409, headers=mutation).json()
+            assert result == {"wake_requested": False, "error": "USB host not suspended"}
+            verify_mode(original)
+            print("Wake API rejects unauthorized calls and active USB; boot selection unchanged.", flush=True)
         selected = call("POST", "/api/mode", 200, headers=mutation, data={"mode": other}).json()
         assert selected["mode"] == other
         verify_mode(other)

@@ -4,7 +4,7 @@
 #include "settings.h"
 
 namespace bootswitch {
-enum class BleCommand : uint8_t { None, Linux, Windows, Toggle };
+enum class BleCommand : uint8_t { None, Linux, Windows, Toggle, Wake };
 BleCommand parseBleCommand(const uint8_t* bytes, size_t length);
 
 // BLE callbacks only enqueue commands. The application applies them through

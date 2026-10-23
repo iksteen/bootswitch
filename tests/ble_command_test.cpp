@@ -14,7 +14,9 @@ int main() {
   assert(command("toggle") == BleCommand::Toggle);
   assert(command("linux") == BleCommand::Linux);
   assert(command("windows") == BleCommand::Windows);
-  for (const char* invalid : {"", "Toggle", "toggle\n", "linux ", " windows", "1", "togglejunk"})
+  assert(command("wake") == BleCommand::Wake);
+  for (const char* invalid : {"", "Toggle", "toggle\n", "linux ", " windows", "1", "togglejunk",
+                              "Wake", "wake\n", "wake "})
     assert(command(invalid) == BleCommand::None);
   assert(parseBleCommand(nullptr, 7) == BleCommand::None);
   const uint8_t embeddedZero[] = {'l', 'i', 'n', 'u', 'x', 0, 'x'};
