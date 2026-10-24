@@ -16,6 +16,9 @@ test:
 	./build/config_disk_test build
 	python3 tests/check_config_fat.py
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -Iinclude src/boot_disk.cpp src/virtual_disk.cpp tests/sparse_disk_test.cpp -o build/sparse_disk_test
+	./build/sparse_disk_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
 	  -DBOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE=1 \
 	  $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
