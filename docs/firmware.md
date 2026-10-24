@@ -11,12 +11,12 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/iksteen/boo
 | `bootswitchx64.efi` | x86-64 EFI bridge; see [PC boot setup](boot-setup.md). |
 | `bootswitch-sticks3-flash.zip` | Complete production installation package; signed USB updates enabled, remote download mode disabled. |
 | `bootswitch-sticks3.bin` | Production application image only. |
-| `update-sticks3.bin` | Signed StickS3 production update; copy to BOOTSWITCH as `FIRMWARE.BIN`. |
+| `update-sticks3.bin` | Signed StickS3 production update; copy to BOOTSWITCH as `UPDATE.BIN`. |
 | `bootswitch-sticks3-dev-flash.zip` | Complete development installation package; remote flash and USB firmware updates enabled. |
 | `bootswitch-sticks3-dev.bin` | Development application image only. |
 | `bootswitch-tqt-flash.zip` | Complete T-QT production installation package. |
 | `bootswitch-tqt.bin` | T-QT production application only. |
-| `update-tqt.bin` | Signed T-QT production update; copy to BOOTSWITCH as `FIRMWARE.BIN`. |
+| `update-tqt.bin` | Signed T-QT production update; copy to BOOTSWITCH as `UPDATE.BIN`. |
 | `bootswitch-tqt-dev-flash.zip` | Complete T-QT development installation package. |
 | `bootswitch-tqt-dev.bin` | T-QT development application only. |
 | `SHA256SUMS` | SHA-256 hashes of the release downloads. |
@@ -32,7 +32,8 @@ table installed. Production USB updates use the signed `update-<board>.bin`
 asset; development firmware also accepts raw application images. Signed updates
 are direct binary downloads with stable board-specific names, without a ZIP
 wrapper. The `bootswitch-<board>.bin` images are raw serial-flash applications.
-The virtual USB disk expects `FIRMWARE.BIN`.
+Current firmware expects `UPDATE.BIN` on the USB disk; see the older-firmware
+upgrade instructions below.
 
 To install the firmware, extract the flash ZIP and open a terminal in its
 directory. Install `esptool==4.9.0` in a Python environment, put the StickS3 in
@@ -77,16 +78,20 @@ Production and development builds enable USB updates. Use an image for the
 matching board; wrong-board images are rejected. Production firmware requires a valid
 signature from the BootSwitch ECDSA P-256 key embedded in the running application.
 Download **update-sticks3.bin** for StickS3 or **update-tqt.bin** for T-QT.
-Copy it to the root of **BOOTSWITCH** with destination name **FIRMWARE.BIN**,
+Copy it to the root of **BOOTSWITCH** with destination name **UPDATE.BIN**,
 then safely eject. For example, on StickS3:
 
 ```sh
-cp update-sticks3.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
+cp update-sticks3.bin "/run/media/$USER/BOOTSWITCH/UPDATE.BIN"
 gio mount --eject "/run/media/$USER/BOOTSWITCH"
 ```
 
 On Windows, copy the downloaded binary to BOOTSWITCH, rename it to
-**FIRMWARE.BIN**, then use **Safely Remove Hardware/Eject**.
+**UPDATE.BIN**, then use **Safely Remove Hardware/Eject**.
+
+If the device's currently installed firmware still expects `FIRMWARE.BIN`, copy
+this upgrade under that name once. Once installed, use `UPDATE.BIN` for future
+updates; new firmware does not treat `FIRMWARE.BIN` as an update request.
 
 The display shows update progress, and the Stick restarts after validation and
 activation. The saved OS selection and settings are retained. Valid CONFIG.INI
@@ -109,7 +114,7 @@ display while the USB disk is rebuilt from the saved configuration and exposed
 again through a brief USB reconnect. The rejected firmware, temporary files and
 unsaved configuration edits are discarded. Copy a corrected update and eject to
 retry without resetting the Stick. The RAM disk is also rebuilt at startup, so
-FIRMWARE.BIN is not reapplied on later ejects.
+UPDATE.BIN is not reapplied on later ejects.
 
 Use the signed update `.bin` for production, or a raw application `.bin` for
 development. ZIPs, EFI binaries and merged flash images are not USB updates.

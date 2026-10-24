@@ -66,7 +66,7 @@ These compile-time options are independent and cannot be changed through CONFIG.
 | Build flag | Default | Effect when `1` |
 | --- | --- | --- |
 | `BOOTSWITCH_ENABLE_REMOTE_FLASH` | `0` | API `mode=flash` and BLE `flash` |
-| `BOOTSWITCH_ENABLE_USB_UPDATE` | `1` | Installing FIRMWARE.BIN on eject/apply |
+| `BOOTSWITCH_ENABLE_USB_UPDATE` | `1` | Installing UPDATE.BIN on eject/apply |
 | `BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE` | `0` | Accept raw unsigned USB updates as well as valid signed updates |
 | `BOOTSWITCH_DISABLE_BATTERY_CHARGING` | `0` | Disable battery charging for power measurements |
 
@@ -91,7 +91,7 @@ charging. The authenticated [power diagnostics](controls.md#wi-fi-and-http-api)
 report the confirmed startup state.
 
 With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
-400 and BLE `flash` is ignored. With USB updates disabled, FIRMWARE.BIN is an
+400 and BLE `flash` is ignored. With USB updates disabled, UPDATE.BIN is an
 ordinary RAM-disk file: it is ignored on eject and discarded at restart. Normal
 CONFIG.INI saves still work. The physical reset/power button provides download
 mode in either build.
@@ -116,7 +116,7 @@ secret and signs production firmware for each board against the committed
 public key. Production updates are direct binary assets named
 `update-sticks3.bin` and `update-tqt.bin`; raw applications retain the
 `bootswitch-<board>.bin` names. Local signed release builds use the same names.
-The virtual USB disk still expects `FIRMWARE.BIN` as the destination filename.
+The virtual USB disk still expects `UPDATE.BIN` as the destination filename.
 Branch and PR builds never receive the key. See [firmware signing](signing.md).
 Only the publish job has release write permission. All action dependencies are
 pinned to commit SHAs, with weekly Dependabot checks for updates. See the

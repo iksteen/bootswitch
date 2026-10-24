@@ -219,9 +219,9 @@ const char* VirtualDisk::firmware(File& output) const {
     const uint8_t* entry = root + index * 32;
     if (entry[0] == 0) break;
     if (entry[0] == 0xE5 || entry[11] == 0x0F) continue;
-    if (std::memcmp(entry, "FIRMWAREBIN", 11) != 0) continue;
+    if (std::memcmp(entry, "UPDATE  BIN", 11) != 0) continue;
     if (entry[11] & 0x18) return "Firmware is not a file";
-    if (file) return "Duplicate FIRMWARE.BIN";
+    if (file) return "Duplicate UPDATE.BIN";
     file = entry;
   }
   if (!file) return nullptr;

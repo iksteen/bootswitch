@@ -6,7 +6,7 @@
 namespace bootswitch {
 // RAM-backed FAT volume: normal editor writes, including temporary files and
 // rename replacement, are preserved for this USB session. Only validated
-// CONFIG.INI settings and optional FIRMWARE.BIN are applied after safe eject.
+// CONFIG.INI settings and optional UPDATE.BIN are applied after safe eject.
 class VirtualDisk {
  public:
   static constexpr size_t kCapacity = BootDisk::kSectorCount * BootDisk::kSectorSize;

@@ -129,7 +129,7 @@ sparse pool described above. It contains:
 - `MODE.TXT`: `linux` or `windows`, padded to eight bytes including newline.
 - `SWITCH.CFG`: `set bootswitch_mode=linux` or `…=windows`, with fixed file size.
 - `CONFIG.INI`: [editable settings](configuration.md).
-- `FIRMWARE.BIN`: [application update](firmware.md#usb-disk-updates) only in builds
+- `UPDATE.BIN`: [application update](firmware.md#usb-disk-updates) only in builds
   enabling USB updates.
 
 The two boot files have read-only attributes; their payloads are generated from

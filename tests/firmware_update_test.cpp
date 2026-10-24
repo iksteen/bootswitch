@@ -40,7 +40,7 @@ struct Fixture {
     }
     assert(chain.size() == count);
     auto* entry = bytes.data() + root + 128;
-    std::memcpy(entry, "FIRMWAREBIN", 11);
+    std::memcpy(entry, "UPDATE  BIN", 11);
     entry[11] = 0x20;
     put16(entry + 26, chain.empty() ? 0 : chain[0]);
     put32(entry + 28, payload.size());
@@ -129,6 +129,10 @@ void diskTests(Fixture& fixture) {
   fixture.install(content); fixture.bytes[root + 128] = 0xE5;
   assert(!fixture.disk.firmware(absent) && !absent);
   fixture.install(content); std::memcpy(fixture.bytes.data() + root + 128, "EDITOR  TMP", 11);
+  assert(!fixture.disk.firmware(absent) && !absent);
+  // Only UPDATE.BIN requests an update; the previous disk filename is ordinary
+  // session storage on new firmware, like other non-update files.
+  fixture.install(content); std::memcpy(fixture.bytes.data() + root + 128, "FIRMWAREBIN", 11);
   assert(!fixture.disk.firmware(absent) && !absent);
 }
 

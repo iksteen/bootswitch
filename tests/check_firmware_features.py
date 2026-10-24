@@ -32,7 +32,8 @@ for environment, development in ((board + suffix, bool(suffix)) for board in boa
     for symbol in update_symbols:
         assert symbol in symbols, f"{environment}: missing {symbol}"
     assert (b"Entering flash mode\0" in image) == development
-    assert b"FIRMWAREBIN" in image
+    assert b"UPDATE  BIN" in image
+    assert b"FIRMWAREBIN" not in image
     assert (b"Firmware signature required\0" in image) != development
     assert public_der() in image
     print(f"{environment}: USB updater present; unsigned images {'allowed' if development else 'rejected'}.")
@@ -60,7 +61,7 @@ for environment, development in ((board + suffix, bool(suffix)) for board in boa
         if not development:
             assert b"USB-disk updates require a valid BootSwitch ECDSA signature" in bundle.read("README.txt")
             assert f"update-{environment}.bin".encode() in bundle.read("README.txt")
-    for obsolete in ("FIRMWARE.BIN", f"firmware-{environment}.bin"):
+    for obsolete in ("FIRMWARE.BIN", "UPDATE.BIN", f"firmware-{environment}.bin"):
         assert not (output / obsolete).exists(), "Obsolete release filename must not linger"
     update = output / f"update-{environment}.bin"
     if update.exists():

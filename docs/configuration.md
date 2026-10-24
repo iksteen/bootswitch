@@ -93,7 +93,7 @@ discovery. Use a reserved IP address if discovery is unreliable, or return to
   file is an error.
 - CONFIG.INI may be at most 4096 bytes. Do not format the volume or change its
   boot files. Other files and editor backups exist only in RAM and disappear on
-  restart, except that [FIRMWARE.BIN](firmware.md#usb-disk-updates) can install an
+  restart, except that [UPDATE.BIN](firmware.md#usb-disk-updates) can install an
   update when enabled in the running build.
 
 Anyone who can access this USB disk can read and change its Wi-Fi password and

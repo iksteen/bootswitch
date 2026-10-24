@@ -43,7 +43,7 @@ key. It refuses an already signed input and verifies the signature it creates.
 The signed downloads use `update-sticks3.bin` and `update-tqt.bin` for
 both local release builds and GitHub releases. Raw applications retain the
 `bootswitch-<board>.bin` names. For a manual USB update, copy the signed download
-to the disk as `FIRMWARE.BIN`; the signature trailer is never written to the
+to the disk as `UPDATE.BIN`; the signature trailer is never written to the
 application partition.
 
 ## GitHub releases

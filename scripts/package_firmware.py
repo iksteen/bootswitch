@@ -61,14 +61,17 @@ def package_firmware(source, target, env):
         'Remote download-mode commands are disabled in this firmware.\n')
     usb_instructions = (
         'USB-disk firmware updates are enabled. Copy the application firmware.bin\n'
-        'to BOOTSWITCH as FIRMWARE.BIN, then safely eject to install and restart.\n'
+        'to BOOTSWITCH as UPDATE.BIN, then safely eject to install and restart.\n'
         'Unsigned images are accepted in this development build.\n'
         'This preserves settings and does not update the bootloader/partition map.\n'
         if features["BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE"] else
         'USB-disk updates require a valid BootSwitch ECDSA signature. Copy\n'
-        f'{update_name} to BOOTSWITCH as FIRMWARE.BIN,\n'
+        f'{update_name} to BOOTSWITCH as UPDATE.BIN,\n'
         'then safely eject to install. Raw firmware.bin is only for serial flashing.\n') if features["BOOTSWITCH_ENABLE_USB_UPDATE"] else (
-        'USB-disk firmware updates are disabled. FIRMWARE.BIN is ignored.\n')
+        'USB-disk firmware updates are disabled. UPDATE.BIN is ignored.\n')
+    if features["BOOTSWITCH_ENABLE_USB_UPDATE"]:
+        usb_instructions += ('If the installed firmware expects FIRMWARE.BIN, use that name for this\n'
+                             'upgrade once; afterward use UPDATE.BIN.\n')
     charge_instructions = 'T-QT has no battery or charging support.\n' if tqt else (
         'Battery charging is disabled at startup for power measurements.\n'
         if features["BOOTSWITCH_DISABLE_BATTERY_CHARGING"] else
@@ -126,9 +129,9 @@ SHA256SUMS contains hashes of the supplied images and instructions.
             entry.external_attr = 0o100644 << 16
             bundle.writestr(entry, data)
     (output / f"{stem}.bin").write_bytes(firmware.read_bytes())
-    # Signed release filenames identify the board. FIRMWARE.BIN is only the
+    # Signed release filenames identify the board. UPDATE.BIN is only the
     # destination filename required by the virtual USB disk.
-    for obsolete in ("FIRMWARE.BIN", f"firmware-{environment}.bin"):
+    for obsolete in ("FIRMWARE.BIN", "UPDATE.BIN", f"firmware-{environment}.bin"):
         (output / obsolete).unlink(missing_ok=True)
     update = output / update_name
     if signed is not None:

@@ -148,7 +148,7 @@ struct Fixture {
     if (firmware) {
       const size_t count = (image.size() + 511) / 512;
       auto* entry = bytes.data() + rootOffset + 128;
-      std::memcpy(entry, "FIRMWAREBIN", 11);
+      std::memcpy(entry, "UPDATE  BIN", 11);
       entry[11] = 0x20;
       put16(entry + 26, 6);
       put32(entry + 28, image.size());

@@ -12,7 +12,7 @@ for index in range(0, 20, 2):
     subprocess.run(["mdel", "-i", image_arg, f"::FILL{index:02}.TMP"], check=True)
 source = Path("build/test-firmware.bin")
 source.write_bytes(bytes(range(256)) * 5079 + b"partial final sector")
-subprocess.run(["mcopy", "-i", image_arg, str(source), "::FIRMWARE.BIN"], check=True)
+subprocess.run(["mcopy", "-i", image_arg, str(source), "::UPDATE.BIN"], check=True)
 target = Path("build/extracted-firmware.bin")
 subprocess.run(["build/firmware_update_test", "--extract", str(image), str(target)], check=True)
 assert target.read_bytes() == source.read_bytes()
