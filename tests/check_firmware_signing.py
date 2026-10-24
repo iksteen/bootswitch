@@ -32,6 +32,13 @@ def fixtures(directory):
         signing.generate_key(other_private, other_public)
     signing.embed_key(directory / "firmware_public_key.h", public)
     image = application()
+    for target in (0, 1, 2):
+        variant = bytearray(image)
+        variant[288:300] = b"BSWBRD01" + struct.pack("<I", target)
+        (directory / f"target-{target}-raw.bin").write_bytes(variant)
+        if target in (0, 1):
+            (directory / f"target-{target}-signed.bin").write_bytes(
+                signing.sign_image(bytes(variant), private, public))
     (directory / "raw.bin").write_bytes(image)
     (directory / "signed.bin").write_bytes(signing.sign_image(image, private, public))
     (directory / "wrong-key.bin").write_bytes(signing.sign_image(image, other_private, other_public))
@@ -73,6 +80,21 @@ class SigningTests(unittest.TestCase):
             signing.verify_image(self.signed, public)
         with self.assertRaises(ValueError):
             signing.sign_image(self.signed, self.private, self.public)
+
+    def test_board_identity_is_signed(self):
+        for target in (0, 1):
+            variant = bytearray(self.image)
+            variant[288:300] = b"BSWBRD01" + struct.pack("<I", target)
+            signed = signing.sign_image(bytes(variant), self.private, self.public)
+            self.assertEqual(signing.METADATA.unpack(signed[-80:-64])[2], target)
+            self.assertEqual(signing.verify_image(signed, self.public), variant)
+            changed = bytearray(signed)
+            changed[296] ^= 1
+            with self.assertRaises(ValueError):
+                signing.verify_image(changed, self.public)
+        variant[296:300] = struct.pack("<I", 2)
+        with self.assertRaises(ValueError):
+            signing.sign_image(bytes(variant), self.private, self.public)
 
     def test_key_generation_never_overwrites(self):
         before = self.private.read_bytes()

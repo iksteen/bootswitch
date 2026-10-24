@@ -93,9 +93,10 @@ def main():
         assert isinstance(status["display_idle_ms"], int)
         assert status["wifi_sleep"] in (0, 1, 2, -1)
         for field in ("display_awake", "wifi_connected", "ble_active",
-                      "ble_modem_sleep", "ble_sleeping", "pmic_idle_sleep",
-                      "battery_charging_enabled"):
+                      "ble_modem_sleep", "ble_sleeping", "pmic_idle_sleep"):
             assert type(status[field]) is bool, f"Invalid power field: {field}"
+        # Some boards have no software-controlled charger; unknown is null.
+        assert status["battery_charging_enabled"] is None or type(status["battery_charging_enabled"]) is bool
         assert status["wifi_connected"] is True
         assert isinstance(status["wifi_bssid"], str) and len(status["wifi_bssid"]) == 17
         assert isinstance(status["wifi_channel"], int) and 1 <= status["wifi_channel"] <= 14

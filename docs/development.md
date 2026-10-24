@@ -23,6 +23,39 @@ For a serial upload from source, put the Stick in [download mode](firmware.md#do
 then run `pio run --environment sticks3 --target upload --upload-port /dev/ttyACM0`.
 Use `--environment sticks3-dev` for the development build.
 
+### T-QT builds
+
+Use `--environment tqt` for production or `--environment tqt-dev` for
+development. Release packages are written to `build/release/tqt/` and
+`build/release/tqt-dev/`. The target requires the FN4R2 variant (4 MiB flash,
+2 MiB quad PSRAM); it has a separate partition map and board descriptor.
+
+```sh
+pio run --environment tqt --target release
+pio run --environment tqt-dev --target release
+```
+
+T-QT development enables remote ROM entry, unsigned updates and a USB CDC
+recovery port. Serial reset requests are deferred to the application loop after
+the USB control transfer completes. T-QT has no battery or charger. Production
+exposes no CDC port and requires signed updates. Board-specific display,
+buttons, battery capabilities and download-mode operations are implemented in
+[board.cpp](../src/board.cpp).
+
+## Screen rendering
+
+The application supplies a `ScreenState` snapshot to the board-independent
+[screen renderer](../src/screen.cpp). Hardware initialization and display power
+remain in the board/application layer; the renderer reads no radios, storage,
+buttons or clocks. Telemetry sampling retains raw values rather than formatted
+screen text.
+
+[Screen layout profiles](../src/screen_layout.cpp) define coordinates, reserved
+update regions, font sizes and wording for 240×135 and 128×128 displays. A profile
+is selected once after display initialization. Other dimensions require a new
+profile. Full redraws, status/progress updates and telemetry updates share one
+renderer; the latter two only repaint their reserved regions.
+
 ## Development feature flags
 
 The default **sticks3** build enables signed USB updates and battery charging,
@@ -66,7 +99,7 @@ mode in either build.
 ## CI and releases
 
 [GitHub Actions](https://github.com/iksteen/bootswitch/actions/workflows/build.yml)
-builds EFI and both firmware variants on branch pushes, pull requests and manual
+builds EFI and production/development firmware for both boards on branch pushes, pull requests and manual
 runs. The EFI job runs the native tests and boots the EFI bridge with
 systemd-boot in QEMU/OVMF; the firmware job builds and packages the pinned
 production and development
@@ -74,13 +107,17 @@ environments. Successful jobs upload separate EFI, production firmware and
 development firmware artifacts, retained for 30 days.
 
 Pushing a version tag such as `v0.1.0` runs those same builds and tests, then
-publishes a GitHub Release with the EFI binary, both firmware variants and their
+publishes a GitHub Release with the EFI binary, all four firmware variants and their
 flash ZIPs and checksums. Tags containing a hyphen, such as `v0.1.0-rc.1`,
 produce prereleases. Publishing uses the repository's automatic `GITHUB_TOKEN`.
 The publish job uses the protected **firmware-signing** environment and waits for
 its required approval. It requires that environment's **FIRMWARE_SIGNING_KEY**
-secret and adds `FIRMWARE.BIN`, signed against the committed public key. Branch
-and PR builds never receive the key. See [firmware signing](signing.md).
+secret and signs production firmware for each board against the committed
+public key. Production updates are direct binary assets named
+`update-sticks3.bin` and `update-tqt.bin`; raw applications retain the
+`bootswitch-<board>.bin` names. Local signed release builds use the same names.
+The virtual USB disk still expects `FIRMWARE.BIN` as the destination filename.
+Branch and PR builds never receive the key. See [firmware signing](signing.md).
 Only the publish job has release write permission. All action dependencies are
 pinned to commit SHAs, with weekly Dependabot checks for updates. See the
 [build](../.github/workflows/build.yml) and
@@ -99,6 +136,8 @@ python3 tests/check_efi.py
 # Production package, development firmware, and compiled feature checks:
 pio run --environment sticks3 --target release
 pio run --environment sticks3-dev --target release
+pio run --environment tqt --target release
+pio run --environment tqt-dev --target release
 python3 tests/check_firmware_features.py
 ```
 
@@ -109,6 +148,12 @@ rename, including a multi-cluster configuration. `fsck.fat` and `mtype`
 independently validate both generated filesystems. If running under a
 ptrace-based sandbox, use
 `ASAN_OPTIONS=detect_leaks=0 make test` (LeakSanitizer cannot run under ptrace).
+
+Renderer tests exercise the production drawing code through a fake display for
+both profiles: text and selection colors, layout bounds, truncation of long
+errors, clearing stale messages, and progress/telemetry updates that leave the
+rest of the screen intact. Telemetry tests verify 1 Hz polling while awake and
+no sampling while asleep.
 
 BLE command tests cover remote flash both enabled and disabled. Firmware feature
 checks verify that both binaries contain the USB updater and public key, that

@@ -1,8 +1,5 @@
 #include "display_telemetry.h"
 
-#include <cstdio>
-#include <cstring>
-
 namespace bootswitch {
 bool DisplayTelemetry::pollDue(uint32_t now, bool screenAwake) {
   if (!screenAwake) {
@@ -16,20 +13,19 @@ bool DisplayTelemetry::pollDue(uint32_t now, bool screenAwake) {
 }
 
 bool DisplayTelemetry::update(bool wifiEnabled, bool wifiConnected,
-                              int32_t rssi, int32_t batteryLevel) {
-  char wifi[20];
-  if (!wifiEnabled) std::snprintf(wifi, sizeof(wifi), "WiFi:off");
-  else if (!wifiConnected || rssi >= 0) std::snprintf(wifi, sizeof(wifi), "WiFi:--");
-  else std::snprintf(wifi, sizeof(wifi), "WiFi:%lddBm", static_cast<long>(rssi));
-
-  char battery[8];
-  if (batteryLevel < 0 || batteryLevel > 100) std::snprintf(battery, sizeof(battery), "--");
-  else std::snprintf(battery, sizeof(battery), "%ld%%", static_cast<long>(batteryLevel));
-
-  char next[sizeof(text_)];
-  std::snprintf(next, sizeof(next), "%s Bat:%s", wifi, battery);
-  if (std::strcmp(next, text_) == 0) return false;
-  std::memcpy(text_, next, std::strlen(next) + 1);
-  return true;
+                              int32_t rssi, int32_t batteryLevel, bool batterySupported) {
+  wifiConnected = wifiEnabled && wifiConnected;
+  if (!wifiConnected || rssi >= 0) rssi = 0;
+  if (!batterySupported || batteryLevel < 0 || batteryLevel > 100) batteryLevel = -1;
+  const bool changed = !haveValues_ || values_.wifiEnabled != wifiEnabled ||
+      values_.wifiConnected != wifiConnected || values_.rssi != rssi ||
+      values_.batteryLevel != batteryLevel || values_.batterySupported != batterySupported;
+  values_.wifiEnabled = wifiEnabled;
+  values_.wifiConnected = wifiConnected;
+  values_.rssi = rssi;
+  values_.batteryLevel = batteryLevel;
+  values_.batterySupported = batterySupported;
+  haveValues_ = true;
+  return changed;
 }
 }  // namespace bootswitch

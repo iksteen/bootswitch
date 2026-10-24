@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <M5Unified.h>
+#include "board.h"
 #include <Preferences.h>
 #include <USB.h>
 #include <USBMSC.h>
@@ -24,6 +24,7 @@
 #include "virtual_disk.h"
 #include "usb_wake.h"
 #include "display_telemetry.h"
+#include "screen.h"
 #include "firmware_update.h"
 #include "update_coordinator.h"
 
@@ -39,6 +40,18 @@ using bootswitch::UsbWakeResult;
 
 namespace {
 USBMSC disk;
+#if BOOTSWITCH_BOARD_TQT && BOOTSWITCH_ENABLE_REMOTE_FLASH
+// Explicitly start CDC before USB.begin(), after all interfaces are registered.
+// CDC's host-controlled ROM reset is a development feature only.
+USBCDC recoverySerial;
+std::atomic<bool> cdcDownloadRequested{false};
+#endif
+#if BOOTSWITCH_BOARD_TQT
+constexpr size_t kDiskPoolSize = 1792 * 1024;
+uint16_t diskSectorMap[BootDisk::kSectorCount];
+#else
+constexpr size_t kDiskPoolSize = VirtualDisk::kCapacity;
+#endif
 Preferences preferences;
 WebServer server(80);
 Settings settings;
@@ -73,21 +86,21 @@ bool powerControllerSleep = false;
 int8_t batteryChargingEnabled = -1;
 uint32_t lastDisplayActivity = 0;
 bootswitch::DisplayTelemetry displayTelemetry;
+bootswitch::ScreenRenderer screen;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
-char firmwareStatus[40];
 int lastFirmwarePercent = -1;
 uint32_t lastFirmwareDraw = 0;
 void firmwareProgress(size_t written, size_t total);
 #endif
 void drawScreen();
-void drawStatusLine();
+bootswitch::ScreenState screenState();
 
 void wakeDisplay() {
   lastDisplayActivity = millis();
   if (!screenAwake) {
     screenAwake = true;
     displayTelemetry.invalidate();
-    M5.Display.wakeup();
+    bootswitch::boardDisplay().wakeup();
     redraw = true;
   }
 }
@@ -121,10 +134,14 @@ void loadSettings() {
       preferences.putString("settings", configText) != length)
     problem = "Settings save failed";
   diskMutex = xSemaphoreCreateMutex();
-  diskBytes = static_cast<uint8_t*>(heap_caps_malloc(VirtualDisk::kCapacity,
+  diskBytes = static_cast<uint8_t*>(heap_caps_malloc(kDiskPoolSize,
                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (diskMutex && diskBytes) {
-    virtualDisk = VirtualDisk(diskBytes, VirtualDisk::kCapacity);
+    virtualDisk = VirtualDisk(diskBytes, kDiskPoolSize
+#if BOOTSWITCH_BOARD_TQT
+                              , diskSectorMap
+#endif
+    );
     ramDiskReady = virtualDisk.format(configText, length);
   }
   if (!ramDiskReady) {
@@ -227,10 +244,8 @@ void firmwareProgress(size_t written, size_t total) {
   // Keep intermediate updates at 10 Hz; always show the first and final value.
   if (int(percent) != lastFirmwarePercent &&
       (lastFirmwarePercent < 0 || percent == 100 || uint32_t(now - lastFirmwareDraw) >= 100)) {
-    std::snprintf(firmwareStatus, sizeof(firmwareStatus), "Updating firmware: %u%%", percent);
-    problem = firmwareStatus;
-    drawStatusLine();
     lastFirmwarePercent = percent;
+    screen.drawStatus(screenState());
     lastFirmwareDraw = now;
   }
   delay(1);  // Yield while USB and the idle watchdog remain active.
@@ -242,6 +257,9 @@ void applyConfiguration() {
   wakeDisplay();
   bootswitch::ApplyResult result;
   if (!updates.processApply(result)) return;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  lastFirmwarePercent = -1;
+#endif
   problem = result.error ? result.error :
       (result.firmware ? "Firmware ready; restarting" : "Config saved; restarting");
   redraw = true;
@@ -253,7 +271,7 @@ void applyConfiguration() {
 
 #if BOOTSWITCH_ENABLE_REMOTE_FLASH
 bool requestFlash() {
-  if (restartPending != RestartAction::None || !M5.Power.M5pm1.isEnabled()) return false;
+  if (restartPending != RestartAction::None || !bootswitch::boardCanEnterDownload()) return false;
   wakeDisplay();
   problem = "Entering flash mode";
   redraw = true;
@@ -480,51 +498,32 @@ bool pollDisplayTelemetry(uint32_t now) {
   const bool connected = networkEnabled && WiFi.status() == WL_CONNECTED;
   return displayTelemetry.update(networkEnabled, connected,
       connected ? WiFi.RSSI() : 0,
-      bootswitch::preparePowerAccess() ? M5.Power.getBatteryLevel() : -1);
+      bootswitch::boardBatteryLevel(), bootswitch::boardHasBatteryTelemetry());
 }
 
-void drawDisplayTelemetry() {
-  auto& display = M5.Display;
-  display.fillRect(80, 4, display.width() - 88, 12, TFT_BLACK);
-  display.setTextSize(1);
-  display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  display.drawRightString(displayTelemetry.text(), display.width() - 8, 5);
-}
-
-void drawStatusLine() {
-  auto& display = M5.Display;
-  display.setTextSize(1);
-  display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.setTextPadding(display.width() - 16);
-  display.drawString(problem ? problem : "A: toggle  B: wake PC", 8, 62);
-  display.setTextPadding(0);
+bootswitch::ScreenState screenState() {
+  bootswitch::ScreenState state;
+  state.selection = selected.load();
+  state.status = problem;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  state.firmwarePercent = lastFirmwarePercent;
+#endif
+  state.usbReady = usbReady;
+  state.configDisk = ramDiskReady;
+  state.apiEnabled = apiEnabled;
+  state.bleEnabled = bootswitch::bleActive();
+  state.telemetry = displayTelemetry.values();
+  if (networkEnabled) {
+    state.network = WiFi.status() == WL_CONNECTED ?
+        bootswitch::ScreenNetworkState::Connected : bootswitch::ScreenNetworkState::Connecting;
+    if (state.network == bootswitch::ScreenNetworkState::Connected)
+      WiFi.localIP().toString().toCharArray(state.ipAddress, sizeof(state.ipAddress));
+  }
+  return state;
 }
 
 void drawScreen() {
-  auto& display = M5.Display;
-  display.fillScreen(TFT_BLACK);
-  display.setCursor(8, 5);
-  display.setTextSize(1);
-  display.setTextColor(TFT_LIGHTGREY);
-  display.println("NEXT BOOT");
-  display.setCursor(8, 26);
-  display.setTextSize(3);
-  display.setTextColor(selected.load() == Mode::Windows ? TFT_CYAN : TFT_GREEN);
-  display.println(selected.load() == Mode::Windows ? "Windows" : "Linux");
-  drawStatusLine();
-  display.setCursor(8, 80);
-  if (!usbReady) display.println("USB init failed");
-  else display.println(ramDiskReady ? "CONFIG.INI: eject to apply" : "USB: boot selector");
-  display.setCursor(8, 98);
-  if (!networkEnabled) display.println("Wi-Fi: off");
-  else if (WiFi.status() == WL_CONNECTED) {
-    display.print(WiFi.localIP());
-    if (!apiEnabled) display.print(" API off");
-  }
-  else display.println("Wi-Fi: connecting...");
-  display.setCursor(8, 116);
-  display.println(bootswitch::bleActive() ? "BLE: on (PIN pairing)" : "BLE: off");
-  drawDisplayTelemetry();
+  screen.draw(screenState());
   redraw = false;
 }
 }  // namespace
@@ -551,7 +550,20 @@ void setup() {
   disk.vendorID("BootSw");
   disk.productID("Boot selector");
   disk.productRevision("2.0");
-  USB.productName("BootSwitch StickS3");
+  USB.productName(bootswitch::boardUsbName());
+#if BOOTSWITCH_BOARD_TQT && BOOTSWITCH_ENABLE_REMOTE_FLASH
+  // The SDK's built-in 1200-baud reset executes inside the TinyUSB control
+  // callback. Defer it to loop(), just like API/BLE requests, so the transfer
+  // completes before switching the shared PHY to USB Serial/JTAG.
+  recoverySerial.enableReboot(false);
+  recoverySerial.onEvent(ARDUINO_USB_CDC_LINE_CODING_EVENT,
+      [](void*, esp_event_base_t, int32_t, void* eventData) {
+        const auto* event = static_cast<arduino_usb_cdc_event_data_t*>(eventData);
+        if (event && event->line_coding.bit_rate == 1200)
+          cdcDownloadRequested.store(true, std::memory_order_relaxed);
+      });
+  recoverySerial.begin();
+#endif
   disk.onRead(readDisk);
   disk.onWrite(writeDisk);
   disk.onStartStop(startStopDisk);
@@ -559,32 +571,13 @@ void setup() {
   usbReady = bootswitch::prepareUsbWake() && disk.begin(BootDisk::kSectorCount, BootDisk::kSectorSize);
   if (usbReady) usbReady = USB.begin();
 
-  auto config = M5.config();
-  config.internal_imu = false;
-  config.internal_rtc = false;
-  config.internal_spk = false;
-  config.internal_mic = false;
-  // No Grove/HAT accessories or IR: don't keep the external 5 V boost enabled.
-  config.output_power = false;
-  // A/B use direct GPIOs. The application never consumes the PMIC power key.
-  config.pmic_button = false;
-  bootswitch::preparePowerController();
-  M5.begin(config);
-  // StickS3's status LED belongs to the PM1, not Power.setLed().
-  M5.Power.M5pm1.setLedEnLevel(false);
-  // PM1 retains CHG_EN across ESP resets. Explicitly apply both policies so
-  // switching from a measurement build to production restores charging.
-  constexpr bool wantCharging = !BOOTSWITCH_DISABLE_BATTERY_CHARGING;
-  bool actualCharging = false;
-  if (M5.Power.M5pm1.isEnabled() &&
-      M5.Power.M5pm1.setBatteryCharge(wantCharging) &&
-      M5.Power.M5pm1.getBatteryCharge(&actualCharging) && actualCharging == wantCharging) {
-    batteryChargingEnabled = actualCharging ? 1 : 0;
-  } else problem = "Battery charge setup failed";
-  powerControllerSleep = bootswitch::enablePowerControllerSleep();
-  M5.BtnB.setHoldThresh(1500);
-  M5.Display.setRotation(1);
-  M5.Display.setBrightness(60);
+  bootswitch::beginBoard();
+  if (!screen.begin(bootswitch::boardDisplay())) problem = "Unsupported screen size";
+  batteryChargingEnabled = bootswitch::boardChargingEnabled();
+#if !BOOTSWITCH_BOARD_TQT
+  if (batteryChargingEnabled < 0) problem = "Battery charge setup failed";
+#endif
+  powerControllerSleep = bootswitch::boardPowerSleep();
   startNetwork();
   startBluetooth();
   lastDisplayActivity = millis();
@@ -593,17 +586,18 @@ void setup() {
 }
 
 void loop() {
-  M5.update();
+#if BOOTSWITCH_BOARD_TQT && BOOTSWITCH_ENABLE_REMOTE_FLASH
+  if (cdcDownloadRequested.exchange(false, std::memory_order_relaxed)) requestFlash();
+#endif
+  bootswitch::updateBoard();
   if (usbWakeRequested.exchange(false, std::memory_order_relaxed)) wakeDisplay();
   if (restartPending != RestartAction::None) {
     if (int32_t(millis() - restartAt) >= 0) {
       if (restartPending == RestartAction::Application) ESP.restart();
 #if BOOTSWITCH_ENABLE_REMOTE_FLASH
       else {
-        // M5PM1 SYS_CMD: key 0xA + command 3 = download, like the reset key hold.
         // No NVS write: "flash" is an action, never a saved OS selection.
-        const bool sent = bootswitch::preparePowerAccess() &&
-                          M5.Power.M5pm1.writeRegister8(0x0C, 0xA3);
+        const bool sent = bootswitch::boardEnterDownload();
         if (sent) delay(500);
         restartPending = RestartAction::None;
         problem = "Could not enter flash mode";
@@ -618,11 +612,11 @@ void loop() {
       return;
     }
   }
-  if (M5.BtnB.wasPressed()) wakeDisplay();
-  if (M5.BtnB.wasClicked()) wakeHost();
-  if (ramDiskReady && M5.BtnB.wasHold()) updates.requestApply();
+  if (bootswitch::boardButtonB().wasPressed()) wakeDisplay();
+  if (bootswitch::boardButtonB().wasClicked()) wakeHost();
+  if (ramDiskReady && bootswitch::boardButtonB().wasHold()) updates.requestApply();
   applyConfiguration();
-  if (M5.BtnA.wasPressed()) {
+  if (bootswitch::boardButtonA().wasPressed()) {
     // A dark screen requires a separate wake press, avoiding a blind OS change.
     if (!screenAwake) wakeDisplay();
     else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
@@ -661,12 +655,12 @@ void loop() {
   }
   if (screenAwake && settings.screenTimeoutSeconds != 0 &&
       uint32_t(millis() - lastDisplayActivity) >= settings.screenTimeoutSeconds * 1000u) {
-    M5.Display.sleep();
+    bootswitch::boardDisplay().sleep();
     screenAwake = false;
   }
   const bool telemetryChanged = pollDisplayTelemetry(millis());
   if (redraw && screenAwake) drawScreen();
-  else if (telemetryChanged && screenAwake) drawDisplayTelemetry();
+  else if (telemetryChanged && screenAwake) screen.drawTelemetry(displayTelemetry.values());
   // Button/UI/network polling at 50 Hz; TinyUSB has its own event-driven task.
   delay(20);
 }

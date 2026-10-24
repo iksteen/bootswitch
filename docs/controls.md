@@ -12,15 +12,20 @@
 | Side **B**, hold 1.5 seconds | Apply USB files after flushing and unmounting the disk; does not request PC wake. |
 | Separate reset/power button | Press to reset; hold about two seconds for [download mode](firmware.md#download-mode). |
 
+On T-QT, A is the left button (GPIO0), B is the right button (GPIO47),
+and the side button resets the board. Its download-mode sequence is described
+in [Firmware](firmware.md#download-mode).
+
 The first boot defaults to Linux. Each successful selection is saved to NVS
 before it appears on USB or the display. A failed save is shown as an error.
 
-The top line also shows Wi-Fi signal strength in dBm and battery percentage.
-Both are sampled once per second while the display is on; sampling stops when
+The telemetry area (top on StickS3, bottom on T-QT) shows Wi-Fi signal strength
+in dBm. StickS3 also shows battery percentage; T-QT has no battery.
+Readings are sampled once per second while the display is on; sampling stops when
 it sleeps and resumes immediately when it wakes. These updates do not extend
 the screen timeout, and only the small status area is repainted when a value
-changes. Wi-Fi shows `off` when disabled and `--` while disconnected; unsupported
-battery readings show `--`. Battery percentage is M5Unified's voltage-based
+changes. Wi-Fi shows `off` when disabled and `--` while disconnected; unavailable
+StickS3 battery readings show `--`. Battery percentage is a voltage-based
 estimate; a physically disconnected battery may not be reliably detected.
 
 The display sleeps after `screen_timeout` seconds (**60 by default**) without a
@@ -80,7 +85,7 @@ extend its timer. It returns `cpu_mhz`, `apb_hz`, `display_awake`,
 `ble_sleeping`, `pmic_idle_sleep`, and `battery_charging_enabled`. The modem/PMIC
 configuration flags describe enabled power-saving modes; `ble_sleeping` is an
 instantaneous controller sample. `battery_charging_enabled` is the charger-enable
-state confirmed at startup, or `null` if setup failed; it does not indicate
+state confirmed at startup, or `null` if unsupported or setup failed; it does not indicate
 whether current is flowing into the battery. Reading the diagnostics does not
 poll or wake the PM1.
 The associated radio is identified by `wifi_bssid`, `wifi_channel` and

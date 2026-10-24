@@ -1,8 +1,8 @@
 """BootSwitch signed USB updates: P-256/SHA-256, with an 80-byte trailer.
 
 The signed message is the complete ESP application followed by the 16-byte
-metadata (domain/version, exact image length, reserved zero). The final 64 bytes
-are unsigned big-endian r || s. No key supplied by an update is ever trusted.
+metadata (domain/version, exact image length, board identifier: 0=StickS3,
+1=T-QT). The final 64 bytes are unsigned big-endian r || s. No key supplied by an update is ever trusted.
 """
 import argparse
 import base64
@@ -71,6 +71,15 @@ def validate_image(image):
         raise ValueError("Image already has a BootSwitch signature")
 
 
+def image_target(image):
+    if image[288:296] != b"BSWBRD01":
+        return 0  # Legacy StickS3 releases predate the custom descriptor.
+    target, = struct.unpack("<I", image[296:300])
+    if target not in (0, 1):
+        raise ValueError("Unknown BootSwitch board")
+    return target
+
+
 def sign_image(image, private_path, public_path=PUBLIC_KEY):
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec, utils
@@ -80,7 +89,7 @@ def sign_image(image, private_path, public_path=PUBLIC_KEY):
     if (not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1) or
             key.public_key().public_numbers() != public.public_numbers()):
         raise ValueError("Signing key does not match the trusted BootSwitch P-256 public key")
-    metadata = METADATA.pack(MAGIC, len(image), 0)
+    metadata = METADATA.pack(MAGIC, len(image), image_target(image))
     r, s = utils.decode_dss_signature(key.sign(image + metadata, ec.ECDSA(hashes.SHA256())))
     result = image + metadata + r.to_bytes(32, "big") + s.to_bytes(32, "big")
     verify_image(result, public_path)
@@ -94,7 +103,7 @@ def verify_image(signed, public_path=PUBLIC_KEY):
         raise ValueError("Missing firmware signature")
     image, metadata, signature = signed[:-80], signed[-80:-64], signed[-64:]
     magic, length, flags = METADATA.unpack(metadata)
-    if magic != MAGIC or length != len(image) or flags != 0:
+    if magic != MAGIC or length != len(image) or flags != image_target(image):
         raise ValueError("Invalid firmware signature metadata")
     der = utils.encode_dss_signature(int.from_bytes(signature[:32], "big"),
                                      int.from_bytes(signature[32:], "big"))

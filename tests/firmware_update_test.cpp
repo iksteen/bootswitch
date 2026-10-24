@@ -1,4 +1,5 @@
 #include "firmware_update.h"
+#include "firmware_target.h"
 #include <esp_app_format.h>
 #include <esp_image_format.h>
 
@@ -242,6 +243,46 @@ void signatureTests(Fixture& fixture, const std::string& directory) {
   assert(stageFirmware(fixture.open(), staged) && !staged && ends == 1 && !activations);
   std::cout << "Real ECDSA verification, tampering, wrong keys, unsigned policy and trailer stripping passed.\n";
 }
+void targetTests(Fixture& fixture, const std::string& directory) {
+  for (const auto& name : {"raw.bin", "signed.bin", "target-0-raw.bin", "target-0-signed.bin",
+                           "target-1-raw.bin", "target-1-signed.bin", "target-2-raw.bin"}) {
+    const std::string filename(name);
+    const bool signedImage = filename.find("signed") != std::string::npos;
+    const unsigned board = filename.find("target-1") == 0 ? 1 :
+                           filename.find("target-2") == 0 ? 2 : 0;
+    const auto content = readFile(directory + "/" + filename);
+    fixture.install(content);
+    // Exercise the identical file chain through the small-board sparse pool.
+    std::vector<uint8_t> pool(1792 * 1024);
+    std::vector<uint16_t> map(BootDisk::kSectorCount);
+    VirtualDisk sparse(pool.data(), pool.size(), map.data());
+    const char config[] = "wifi_ssid=\n";
+    assert(sparse.format(config, sizeof(config) - 1));
+    uint8_t base[512];
+    for (uint32_t lba = 0; lba < BootDisk::kSectorCount; ++lba) {
+      BootDisk::sector(lba, base, Mode::Linux);
+      if (std::memcmp(base, fixture.bytes.data() + lba * 512, 512))
+        assert(sparse.write(lba, 0, fixture.bytes.data() + lba * 512, 512) == 512);
+    }
+    for (auto* disk : {&fixture.disk, &sparse}) {
+      resetOta();
+      VirtualDisk::File file;
+      assert(!disk->firmware(file) && file);
+      const esp_partition_t* staged = &running;
+      const auto* error = stageFirmware(file, staged);
+      const bool accepted = board == kFirmwareTargetId &&
+                            (signedImage || BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE);
+      assert(bool(error) != accepted);
+      assert((staged == &target) == accepted);
+      assert(begins == (accepted ? 1u : 0u));
+      if (accepted) {
+        const auto length = content.size() - (signedImage ? 80 : 0);
+        assert(flashed == std::vector<uint8_t>(content.begin(), content.begin() + length));
+      }
+    }
+  }
+  std::cout << "Board identity and legacy compatibility enforced before OTA erase, with full and sparse disks.\n";
+}
 }  // namespace
 
 const esp_partition_t* esp_ota_get_running_partition() { return &running; }
@@ -275,6 +316,10 @@ esp_err_t esp_image_verify(esp_image_load_mode_t, const esp_partition_pos_t* pos
 
 int main(int argc, char** argv) {
   Fixture fixture;
+  if (argc == 3 && std::string(argv[1]) == "--target-tests") {
+    targetTests(fixture, argv[2]);
+    return 0;
+  }
   if (argc == 3 && std::string(argv[1]) == "--signed-tests") {
     signatureTests(fixture, argv[2]);
     return 0;

@@ -1,7 +1,6 @@
 #include "display_telemetry.h"
 
 #include <cassert>
-#include <cstring>
 #include <iostream>
 
 int main() {
@@ -19,7 +18,8 @@ int main() {
   sample(1000, true);
   assert(reads == 2);
   // Ordinary screen redraws use cached data without bringing a sample forward.
-  assert(std::strcmp(telemetry.text(), "WiFi:-72dBm Bat:84%") == 0);
+  assert(telemetry.values().wifiEnabled && telemetry.values().wifiConnected);
+  assert(telemetry.values().rssi == -72 && telemetry.values().batteryLevel == 84);
   assert(!telemetry.update(true, true, -72, 84));
   sample(1005, true);
   assert(reads == 2);
@@ -39,12 +39,24 @@ int main() {
   assert(telemetry.pollDue(500, true));  // millis() rollover.
 
   assert(telemetry.update(false, false, 0, -1));
-  assert(std::strcmp(telemetry.text(), "WiFi:off Bat:--") == 0);
+  assert(!telemetry.values().wifiEnabled && !telemetry.values().wifiConnected);
+  assert(telemetry.values().rssi == 0 && telemetry.values().batteryLevel == -1);
   assert(telemetry.update(true, false, -72, 100));
-  assert(std::strcmp(telemetry.text(), "WiFi:-- Bat:100%") == 0);
+  assert(telemetry.values().wifiEnabled && !telemetry.values().wifiConnected);
+  assert(telemetry.values().rssi == 0 && telemetry.values().batteryLevel == 100);
   assert(telemetry.update(true, true, 0, 0));
-  assert(std::strcmp(telemetry.text(), "WiFi:-- Bat:0%") == 0);
+  assert(telemetry.values().rssi == 0 && telemetry.values().batteryLevel == 0);
   assert(telemetry.update(true, true, -100, 101));
-  assert(std::strcmp(telemetry.text(), "WiFi:-100dBm Bat:--") == 0);
+  assert(telemetry.values().rssi == -100 && telemetry.values().batteryLevel == -1);
+  // Unavailable readings normalize to one value rather than causing redraws
+  // when only the hardware's invalid sentinel changes.
+  assert(!telemetry.update(true, true, -100, -2));
+  assert(telemetry.update(false, false, -40, 101));
+  assert(!telemetry.update(false, true, -99, -1));
+  assert(telemetry.update(true, true, -52, 100, false));
+  assert(!telemetry.values().batterySupported && telemetry.values().batteryLevel == -1);
+  assert(!telemetry.update(true, true, -52, 73, false));
+  assert(telemetry.update(true, true, -52, -1, true));
+  assert(telemetry.values().batterySupported && telemetry.values().batteryLevel == -1);
   std::cout << "Display telemetry: 1 Hz while awake, no reads asleep, immediate wake, rollover, and unavailable readings passed.\n";
 }

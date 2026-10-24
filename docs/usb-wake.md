@@ -50,6 +50,8 @@ does not enable them in Windows.
 
 ## Linux wake permission
 
+The supplied helper and udev rule recognize both StickS3 and T-QT firmware.
+
 From the repository root, install the [Python 3 helper](../host/bootswitch_usb_wake.py)
 and its [udev rule](../host/99-bootswitch-wakeup.rules):
 
@@ -67,10 +69,10 @@ the rule passes the application's current sysfs path to the helper. It matches
 the application's USB product name and IDs, excluding the ROM download mode.
 
 The helper resolves that device's **actual parent chain**, enabling supported
-`power/wakeup` attributes on the StickS3, upstream hubs, root hub, and controller
+`power/wakeup` attributes on the BootSwitch device, upstream hubs, root hub, and controller
 ancestors. It discovers them again on each event, so bus numbers, USB ports and
 hub depth can change without editing rules. Unsupported attributes are skipped.
-Enabled ancestor permissions remain enabled after unplugging the StickS3.
+Enabled ancestor permissions remain enabled after unplugging BootSwitch.
 
 Inspect the current chain without changing settings; this does not need root:
 
@@ -91,7 +93,7 @@ are needed; generated files under `build/` are not part of installation.
 ## Windows wake permission
 
 1. Open **Device Manager → Keyboards**.
-2. Find the StickS3's **HID Keyboard Device**. Unplug/reconnect the StickS3 to
+2. Find BootSwitch's **HID Keyboard Device**. Unplug/reconnect BootSwitch to
    identify which entry disappears and returns; several keyboards may have the
    same display name.
 3. Open that device's **Properties → Power Management**.

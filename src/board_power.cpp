@@ -1,5 +1,7 @@
 #include "board_power.h"
 
+#include "board.h"
+#if !BOOTSWITCH_BOARD_TQT
 #include <M5Unified.h>
 
 namespace bootswitch {
@@ -36,3 +38,5 @@ bool enablePowerControllerSleep() {
   return preparePowerAccess() && M5.Power.M5pm1.writeRegister8(kI2cConfig, 5);
 }
 }
+
+#endif

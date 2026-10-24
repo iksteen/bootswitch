@@ -10,7 +10,7 @@ def is_bootswitch(device):
     try:
         return ((device / "idVendor").read_text().strip().lower() == "303a"
                 and (device / "idProduct").read_text().strip().lower() == "1001"
-                and (device / "product").read_text().strip() == "BootSwitch StickS3")
+                and (device / "product").read_text().strip() in ("BootSwitch StickS3", "BootSwitch T-QT"))
     except OSError:
         return False
 

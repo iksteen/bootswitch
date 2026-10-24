@@ -63,6 +63,15 @@ class LinuxWakeTests(unittest.TestCase):
             self.assertEqual(wake.configure_device(alias, self.root),
                              [(app / "power/wakeup", "enabled")])
 
+    def test_tqt_uses_the_same_dynamic_ancestor_discovery(self):
+        hub = self.node("pci/usb3", "disabled")
+        app = self.node("pci/usb3/3-8", "disabled")
+        alias = self.application(app, "BootSwitch T-QT")
+        self.assertEqual(wake.discover(self.root), [alias])
+        states = wake.configure_device(alias, self.root)
+        self.assertEqual([path.parent.parent for path, _ in states], [app, hub])
+        self.assertTrue(all(value == "enabled" for _, value in states))
+
     def test_excludes_bootloader_and_other_devices(self):
         bootloader = self.node("pci/usb6/6-2", "disabled")
         alias = self.application(bootloader, "USB JTAG/serial debug unit")

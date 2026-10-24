@@ -47,10 +47,20 @@ jobs:
         with:
           name: bootswitch-firmware-sticks3-dev
           path: dist
+      - name: Download T-QT firmware binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootswitch-firmware-tqt
+          path: dist
+      - name: Download T-QT development firmware binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootswitch-firmware-tqt-dev
+          path: dist
       # Environment protection gates this job before its signing key is released.
       # The key is passed only to this step, after all tests, on a version tag.
       # Branch/PR builds and development images never receive this secret.
-      - name: Sign production USB update
+      - name: Sign production USB updates
         env:
           FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
         run: |
@@ -62,9 +72,11 @@ jobs:
           key_file="$(mktemp "$RUNNER_TEMP/bootswitch-signing.XXXXXX")"
           trap 'rm -f "$key_file"' EXIT
           printf '%s\n' "$FIRMWARE_SIGNING_KEY" > "$key_file"
-          python scripts/firmware_signing.py sign dist/bootswitch-sticks3.bin \
-            --private-key "$key_file" --output dist/FIRMWARE.BIN
-          python scripts/firmware_signing.py verify dist/FIRMWARE.BIN
+          for board in sticks3 tqt; do
+            python scripts/firmware_signing.py sign "dist/bootswitch-${board}.bin" \
+              --private-key "$key_file" --output "dist/update-${board}.bin"
+            python scripts/firmware_signing.py verify "dist/update-${board}.bin"
+          done
       - name: Checksums and release assets
         working-directory: dist
         env:
@@ -75,7 +87,10 @@ jobs:
           assets=(
             bootswitchx64.efi
             bootswitch-sticks3.bin bootswitch-sticks3-flash.zip
-            FIRMWARE.BIN
+            update-sticks3.bin
+            bootswitch-tqt.bin bootswitch-tqt-flash.zip
+            update-tqt.bin
+            bootswitch-tqt-dev.bin bootswitch-tqt-dev-flash.zip
             bootswitch-sticks3-dev.bin bootswitch-sticks3-dev-flash.zip
           )
           sha256sum "${assets[@]}" > SHA256SUMS

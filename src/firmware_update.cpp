@@ -1,4 +1,5 @@
 #include "firmware_update.h"
+#include "firmware_target.h"
 
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 #include <algorithm>
@@ -77,7 +78,7 @@ const char* authenticateFirmware(VirtualDisk::File file, size_t& imageSize,
     mbedtls_sha256_free(&hash);
     return BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE ? nullptr : "Firmware signature required";
   }
-  if (read32(trailer + 8) != candidateSize || read32(trailer + 12) != 0) {
+  if (read32(trailer + 8) != candidateSize || read32(trailer + 12) != kFirmwareTargetId) {
     mbedtls_sha256_free(&hash);
     return "Invalid signature metadata";
   }
@@ -115,6 +116,15 @@ const char* stageFirmware(VirtualDisk::File file, const esp_partition_t*& staged
   std::memcpy(&descriptorMagic, buffer.get() + descriptorOffset, sizeof(descriptorMagic));
   if (header.magic != ESP_IMAGE_HEADER_MAGIC || header.chip_id != ESP_CHIP_ID_ESP32S3 ||
       descriptorMagic != ESP_APP_DESC_MAGIC_WORD) return "Invalid application image";
+  // Check unsigned development images too. Production's board identifier is
+  // additionally authenticated in the signature trailer, before any OTA erase.
+  probe = file;
+  constexpr size_t targetEnd = kFirmwareTargetOffset + 12;
+  if (probe.read(buffer.get(), targetEnd) != targetEnd) return "Invalid application image";
+  const auto* descriptor = buffer.get() + kFirmwareTargetOffset;
+  const bool hasTarget = std::memcmp(descriptor, kFirmwareTargetMagic, 8) == 0;
+  const uint32_t targetId = hasTarget ? read32(descriptor + 8) : 0;
+  if (targetId != kFirmwareTargetId) return "Firmware is for another board";
   esp_ota_handle_t handle;
   if (esp_ota_begin(target, imageSize, &handle) != ESP_OK)
     return "Firmware update begin failed";

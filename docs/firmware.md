@@ -11,20 +11,28 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/iksteen/boo
 | `bootswitchx64.efi` | x86-64 EFI bridge; see [PC boot setup](boot-setup.md). |
 | `bootswitch-sticks3-flash.zip` | Complete production installation package; signed USB updates enabled, remote download mode disabled. |
 | `bootswitch-sticks3.bin` | Production application image only. |
-| `FIRMWARE.BIN` | Signed production USB update; copy directly to BOOTSWITCH. |
+| `update-sticks3.bin` | Signed StickS3 production update; copy to BOOTSWITCH as `FIRMWARE.BIN`. |
 | `bootswitch-sticks3-dev-flash.zip` | Complete development installation package; remote flash and USB firmware updates enabled. |
 | `bootswitch-sticks3-dev.bin` | Development application image only. |
-| `SHA256SUMS` | SHA-256 hashes of all six release downloads. |
+| `bootswitch-tqt-flash.zip` | Complete T-QT production installation package. |
+| `bootswitch-tqt.bin` | T-QT production application only. |
+| `update-tqt.bin` | Signed T-QT production update; copy to BOOTSWITCH as `FIRMWARE.BIN`. |
+| `bootswitch-tqt-dev-flash.zip` | Complete T-QT development installation package. |
+| `bootswitch-tqt-dev.bin` | T-QT development application only. |
+| `SHA256SUMS` | SHA-256 hashes of the release downloads. |
 
-The development build disables battery charging for power measurements with the
-battery connected. Production firmware enables charging at startup; see
+The StickS3 development build disables battery charging for power measurements with the
+battery connected. StickS3 production firmware enables charging at startup; see
 [build flags](development.md#development-feature-flags).
 
-Both flash ZIPs contain the bootloader, partition table, application, flash
+The flash ZIPs contain the bootloader, partition table, application, flash
 arguments, instructions, build feature flags, and checksums. Application-only
 images can be flashed at `0x10000` with the matching bootloader and partition
-table installed. USB updates use the signed `FIRMWARE.BIN` asset in production;
-development firmware also accepts raw application images.
+table installed. Production USB updates use the signed `update-<board>.bin`
+asset; development firmware also accepts raw application images. Signed updates
+are direct binary downloads with stable board-specific names, without a ZIP
+wrapper. The `bootswitch-<board>.bin` images are raw serial-flash applications.
+The virtual USB disk expects `FIRMWARE.BIN`.
 
 To install the firmware, extract the flash ZIP and open a terminal in its
 directory. Install `esptool==4.9.0` in a Python environment, put the StickS3 in
@@ -48,6 +56,14 @@ either firmware variant.
 
 ## Download mode
 
+**T-QT:** hold the left button (GPIO0), press and release the side reset
+button, then release the left button. Its development firmware also exposes a
+USB CDC serial port: opening that port at **1200 baud** enters ROM download mode.
+This host-controlled recovery port is absent in production firmware. API/BLE
+remote entry is available in the development build on both boards.
+
+**StickS3:**
+
 Connect the StickS3 and hold its side **reset/power** button for about two seconds
 until the internal green LED blinks, then release. This is the board's download
 mode ([M5Stack upload instructions](https://docs.m5stack.com/en/arduino/m5sticks3/program)).
@@ -57,23 +73,29 @@ is separate from the front A boot-selection button.
 
 ## USB-disk updates
 
-Both standard builds enable USB updates. Production firmware requires a valid
+Production and development builds enable USB updates. Use an image for the
+matching board; wrong-board images are rejected. Production firmware requires a valid
 signature from the BootSwitch ECDSA P-256 key embedded in the running application.
-Download **FIRMWARE.BIN**, copy it to the root of **BOOTSWITCH**, then safely eject:
+Download **update-sticks3.bin** for StickS3 or **update-tqt.bin** for T-QT.
+Copy it to the root of **BOOTSWITCH** with destination name **FIRMWARE.BIN**,
+then safely eject. For example, on StickS3:
 
 ```sh
-cp FIRMWARE.BIN "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
+cp update-sticks3.bin "/run/media/$USER/BOOTSWITCH/FIRMWARE.BIN"
 gio mount --eject "/run/media/$USER/BOOTSWITCH"
 ```
 
-On Windows, copy FIRMWARE.BIN to BOOTSWITCH, then use **Safely Remove Hardware/Eject**.
+On Windows, copy the downloaded binary to BOOTSWITCH, rename it to
+**FIRMWARE.BIN**, then use **Safely Remove Hardware/Eject**.
+
 The display shows update progress, and the Stick restarts after validation and
 activation. The saved OS selection and settings are retained. Valid CONFIG.INI
 edits can be applied in the same eject operation. As with settings-only saves,
 flushing/unmounting and holding B for 1.5 seconds also applies the file.
 
 Development firmware also accepts unsigned raw application images, such as
-`bootswitch-sticks3-dev.bin` or `.pio/build/sticks3-dev/firmware.bin`. Recognized
+`bootswitch-sticks3-dev.bin` or `bootswitch-tqt-dev.bin`, depending on the
+board. Recognized
 signed images must have a valid signature in either build. A development image
 requires physical download mode to install from production unless explicitly
 signed by the trusted key holder.

@@ -2,7 +2,7 @@
 
 [Home](../README.md)
 
-- An **M5Stack StickS3 (K150)** and a USB **data** cable to the target PC.
+- An **M5Stack StickS3 (K150)** or **LILYGO T-QT FN4R2**, and a USB **data** cable to the target PC.
 - No external switch, soldering, GPIO connections, or programmer.
 - A 2.4 GHz Wi-Fi network if using Wi-Fi remote control; BLE and physical control
   work without it.
@@ -15,11 +15,41 @@ The StickS3 exposes a data disk, not an OS boot disk.
 
 For Wi-Fi access while the PC is off, use a USB port that supplies standby power
 (motherboard settings such as ErP may disable this), or a suitable powered USB hub
-that retains power without backfeeding the host. The built-in 250 mAh battery is
-only a temporary power source. Do not splice a second power supply into the USB
+that retains power without backfeeding the host. The StickS3's built-in 250 mAh battery is
+only a temporary power source; T-QT requires USB power. Do not splice a second power supply into the USB
 cable.
 
-## Power consumption
+## T-QT
+
+The [LILYGO T-QT](https://github.com/Xinyuan-LilyGO/T-QT) target uses the
+ESP32-S3 FN4R2 variant with **4 MiB flash and 2 MiB quad PSRAM**. Its native USB
+port supports the same disk, HID wake, Wi-Fi and BLE protocols as the StickS3.
+The EFI bridge and GRUB setup are shared between boards.
+
+The 128×128 display uses the original GC9107 panel initialization from LILYGO's
+`extras/old_panel` configuration. Newer panel revisions use different register
+sequences and are not automatically detected. The left button (GPIO0) is A
+(toggle/wake screen); the right button (GPIO47) is B (wake PC/apply settings).
+The side button resets the MCU. LCD wiring is MOSI2, clock3, CS5, DC6, reset1,
+and active-low backlight10.
+
+T-QT has no battery or charger and requires USB power. The firmware does not
+sample a battery ADC input or display a battery percentage on this board.
+The charging diagnostic is `null`. There is no StickS3 PM1 controller.
+
+Two **1.5 MiB application slots** support updates. The USB disk retains its
+4 MiB logical size and FAT16 format, while a **1.75 MiB pool** stores written
+sectors; untouched sectors are generated on demand. This fits the 2 MiB PSRAM
+and accommodates an application image plus filesystem metadata. The host's
+reported free disk space exceeds the write pool. A full pool returns a write
+error; eject/apply or reset rebuilds the disk and releases its slots. It is a
+configuration/update disk, not general storage.
+
+Production and development images identify their board, and the updater rejects
+images for the other board before erasing flash. Use the matching initial flash
+package: the StickS3's memory configuration and partition map are incompatible.
+
+## StickS3 power consumption
 
 The CPU runs at **80 MHz**, retaining an 80 MHz APB clock for USB and SPI. The
 application polls buttons/network at 50 Hz; TinyUSB runs independently in its
@@ -93,8 +123,8 @@ not measure battery discharge, usable capacity or runtime.
 ## USB disk and boot timing
 
 The device generates a **writable 4 MiB RAM disk** with an MBR and a valid FAT16
-partition, label `BOOTSWITCH`, UUID `B007-5E1E`. The disk uses 4 MiB of the
-StickS3's 8 MiB PSRAM and contains:
+partition, label `BOOTSWITCH`, UUID `B007-5E1E`. On StickS3, the disk uses 4 MiB of its 8 MiB PSRAM; T-QT uses the
+sparse pool described above. It contains:
 
 - `MODE.TXT`: `linux` or `windows`, padded to eight bytes including newline.
 - `SWITCH.CFG`: `set bootswitch_mode=linux` or `…=windows`, with fixed file size.

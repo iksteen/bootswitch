@@ -1,3 +1,4 @@
 # Discover the application's current USB hubs and controller on each add/change.
 # The product name excludes the ROM download interface, which shares these IDs.
 ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", ATTR{product}=="BootSwitch StickS3", RUN+="/usr/local/libexec/bootswitch-usb-wake /sys%p"
+ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", ATTR{product}=="BootSwitch T-QT", RUN+="/usr/local/libexec/bootswitch-usb-wake /sys%p"

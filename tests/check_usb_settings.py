@@ -27,6 +27,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True)
     parser.add_argument("--mount", type=Path, required=True)
+    parser.add_argument("--block-device", type=Path, default=Path("/dev/disk/by-label/BOOTSWITCH"),
+                        help="USB partition path; use a serial-specific by-id path with multiple units")
     parser.add_argument("--offline-provisioning", action="store_true",
                         help="Also disable Wi-Fi through USB, then provision it again offline")
     parser.add_argument("--disabled-services", action="store_true",
@@ -43,7 +45,7 @@ def main():
     session = requests.Session()
     session.trust_env = False
     endpoint = f"http://{args.host}/api/mode"
-    block = "/dev/disk/by-label/BOOTSWITCH"
+    block = str(args.block_device)
     info = subprocess.check_output(["udisksctl", "info", "--block-device", block], text=True)
     drive = re.search(r"^\s*Drive:\s+'([^']+)'", info, re.M).group(1)
 

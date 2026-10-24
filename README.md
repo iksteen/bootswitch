@@ -1,9 +1,9 @@
-# BootSwitch for M5Stack StickS3
+# BootSwitch
 
-Choose Linux or Windows using the StickS3's front button, a Wi-Fi web page, an
-HTTP API, or Bluetooth LE. The saved choice survives power loss and applies the
-next time the PC boots. The display shows the selected OS, Wi-Fi signal strength
-and battery level.
+Choose Linux or Windows using a button on an M5Stack StickS3 or LILYGO T-QT,
+a Wi-Fi web page, an HTTP API, or Bluetooth LE. The saved choice survives power loss and applies the
+next time the PC boots. The display shows the selected OS and Wi-Fi signal strength, plus battery level
+on StickS3.
 
 BootSwitch can also wake a sleeping PC through USB when the host permits it.
 Changing the selected OS does not restart the PC or switch a running OS.
@@ -12,8 +12,8 @@ Inspired by Stephen Holdaway's [Hardware boot selection switch](https://hackaday
 
 ## What you need
 
-- An **M5Stack StickS3 (K150)** and a USB **data** cable. Earlier StickC models
-  cannot run this firmware.
+- An **M5Stack StickS3 (K150)** or **LILYGO T-QT FN4R2** (4 MB flash,
+  2 MB PSRAM), and a USB **data** cable. Earlier StickC models cannot run this firmware.
 - Linux and Windows already installed and bootable through systemd-boot or GRUB.
 - Optional: a 2.4 GHz Wi-Fi network and/or a BLE client for remote control.
 
