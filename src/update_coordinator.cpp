@@ -13,6 +13,13 @@ class DiskLock {
 };
 }
 
+int32_t UpdateCoordinator::read(uint32_t lba, uint32_t offset, void* bytes, uint32_t length, Mode mode) {
+  if (!writable()) return -1;
+  DiskLock lock(backend_);
+  if (!writable()) return -1;
+  return disk_.read(lba, offset, bytes, length, mode);
+}
+
 int32_t UpdateCoordinator::write(uint32_t lba, uint32_t offset, const void* bytes, uint32_t length) {
   if (!writable()) return -1;
   DiskLock lock(backend_);
@@ -28,6 +35,16 @@ bool UpdateCoordinator::requestApply() {
   state_.store(State::Pending);
   return true;
 }
+
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+bool UpdateCoordinator::requestDownload() {
+  State expected = State::Writable;
+  if (!state_.compare_exchange_strong(expected, State::Ejecting)) return false;
+  backend_.mediaPresent(false);
+  state_.store(State::DownloadPending);
+  return true;
+}
+#endif
 
 bool UpdateCoordinator::recover() {
   state_.store(State::Recovering);
@@ -47,16 +64,39 @@ bool UpdateCoordinator::recover() {
 
 bool UpdateCoordinator::processApply(ApplyResult& result) {
   State expected = State::Pending;
-  if (!state_.compare_exchange_strong(expected, State::Applying)) return false;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  bool download = false;
+#endif
+  if (!state_.compare_exchange_strong(expected, State::Applying)) {
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+    expected = State::DownloadPending;
+    if (!state_.compare_exchange_strong(expected, State::Applying)) return false;
+    download = true;
+#else
+    return false;
+#endif
+  }
   result = ApplyResult{};
   size_t length = 0;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
   VirtualDisk::File firmware;
+  if (download) {
+    // Network updates use persisted settings, never host edits awaiting eject.
+    // Drain admitted I/O before recycling the disk's storage for the download.
+    Settings saved;
+    if (!backend_.settingsAvailable() || !backend_.loadSavedSettings(saved) ||
+        !formatSettings(saved, text_, capacity_, length)) result.error = "Settings unavailable";
+    if (!result.error) {
+      DiskLock lock(backend_);
+      if (!disk_.format(text_, length)) result.error = "Download disk unavailable";
+    }
+    if (!result.error) result.error = backend_.downloadFirmware(disk_);
+  }
 #endif
   {
     // Drain any write admitted before eject, including one already copying.
     DiskLock lock(backend_);
-    result.error = disk_.configuration(text_, capacity_, length);
+    if (!result.error) result.error = disk_.configuration(text_, capacity_, length);
 #if BOOTSWITCH_ENABLE_USB_UPDATE
     if (!result.error) result.error = disk_.firmware(firmware);
 #endif
@@ -66,7 +106,8 @@ bool UpdateCoordinator::processApply(ApplyResult& result) {
   if (!result.error && !backend_.settingsAvailable()) result.error = "Settings unavailable";
 #if BOOTSWITCH_ENABLE_USB_UPDATE
   const esp_partition_t* staged = nullptr;
-  if (!result.error && firmware) result.error = backend_.stage(firmware, staged);
+  if (!result.error && download && !firmware) result.error = "Downloaded firmware missing";
+  if (!result.error && firmware) result.error = backend_.stage(firmware, staged, download);
   result.firmware = staged != nullptr;
 #endif
   if (!result.error) {

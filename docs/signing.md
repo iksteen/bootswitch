@@ -4,7 +4,8 @@
 
 Production firmware accepts USB updates signed by the ECDSA P-256 public key in
 [`keys/firmware-public.pem`](../keys/firmware-public.pem). Development firmware
-also accepts raw ESP32-S3 application binaries. Signature verification uses
+also accepts raw ESP32-S3 application binaries through USB. Network updates
+require a valid signature in both builds. Signature verification uses
 SHA-256 and mbedTLS; no private key is embedded in either build.
 
 ## Local signing
@@ -120,6 +121,10 @@ reject signed T-QT updates. The existing ESP-IDF image checks still validate the
 application's chip, checksum/digest and exact length before activation.
 
 USB writes are blocked after eject/apply while verification and staging run.
+Network updates block USB reads and writes while downloading into the RAM disk,
+then use the same verification and staging path with signatures required even
+in development builds. HTTPS server verification is separate from firmware
+authentication; TLS trust roots do not authorize firmware signatures.
 Verification streams through a 4096-byte buffer and yields between chunks.
 Invalid production signatures are rejected before `esp_ota_begin` can erase
 the inactive slot. Interrupted writes leave the running slot selected.

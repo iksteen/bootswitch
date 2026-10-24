@@ -6,6 +6,9 @@
 
 namespace bootswitch {
 enum class BleCommand : uint8_t { None, Linux, Windows, Toggle, Wake
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  , Update
+#endif
 #if BOOTSWITCH_ENABLE_REMOTE_FLASH
   , Flash
 #endif

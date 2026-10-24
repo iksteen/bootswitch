@@ -45,6 +45,11 @@ class VirtualDisk {
 #if BOOTSWITCH_ENABLE_USB_UPDATE
   // Missing firmware is normal (an empty File); malformed files are errors.
   const char* firmware(File& output) const;
+  // Download staging on a freshly formatted, host-inaccessible disk. Reserve a
+  // contiguous UPDATE.BIN without allocating another firmware-sized buffer.
+  bool prepareFirmware(size_t length);
+  bool writeFirmware(size_t offset, const void* bytes, size_t length);
+  size_t firmwareCapacity() const;
 #endif
 
  private:
@@ -57,5 +62,8 @@ class VirtualDisk {
   size_t capacity_;
   uint16_t* sectorMap_;
   size_t usedSectors_ = 0;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  size_t downloadSize_ = 0;
+#endif
 };
 }  // namespace bootswitch

@@ -49,6 +49,9 @@ uint16_t VirtualDisk::fatEntry(size_t offset) const {
 
 bool VirtualDisk::format(const char* text, size_t length) {
   if (!available() || !text || !length || length > kMaxConfigSize) return false;
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  downloadSize_ = 0;
+#endif
   if (sectorMap_) {
     std::memset(sectorMap_, 0, BootDisk::kSectorCount * sizeof(*sectorMap_));
     usedSectors_ = 0;
@@ -209,6 +212,40 @@ const char* VirtualDisk::configuration(char* output, size_t capacity, size_t& le
 }
 
 #if BOOTSWITCH_ENABLE_USB_UPDATE
+size_t VirtualDisk::firmwareCapacity() const {
+  // Leave room for configuration, both FATs, root entries and partial sectors.
+  const size_t pool = sectorMap_ ? capacity_ : kCapacity;
+  const size_t volume = (BootDisk::kVolumeSectors - BootDisk::kDataSector - 10) * 512;
+  return std::min(pool > 32768 ? pool - 32768 : 0, volume);
+}
+
+bool VirtualDisk::prepareFirmware(size_t length) {
+  if (!length || length > firmwareCapacity() || layout()) return false;
+  downloadSize_ = 0;
+  // CONFIG.INI occupies clusters 4..11 at most; boot files use 2 and 3.
+  const size_t count = (length + 511) / 512;
+  for (size_t i = 0; i < count; ++i) {
+    uint8_t next[2];
+    put16(next, i + 1 == count ? 0xFFFF : 13 + i);
+    for (unsigned copy = 0; copy < 2; ++copy)
+      if (write(0, kFatOffset + copy * BootDisk::kFatSectors * 512 + (12 + i) * 2,
+                next, sizeof(next)) != sizeof(next)) return false;
+  }
+  uint8_t entry[32] = {};
+  std::memcpy(entry, "UPDATE  BIN", 11);
+  entry[11] = 0x20;
+  put16(entry + 26, 12);
+  put32(entry + 28, length);
+  if (write(0, kRootOffset + 128, entry, sizeof(entry)) != sizeof(entry)) return false;
+  downloadSize_ = length;
+  return true;
+}
+
+bool VirtualDisk::writeFirmware(size_t offset, const void* bytes, size_t length) {
+  if (!downloadSize_ || offset > downloadSize_ || length > downloadSize_ - offset) return false;
+  return write(0, kDataOffset + 10 * 512 + offset, bytes, length) == int32_t(length);
+}
+
 const char* VirtualDisk::firmware(File& output) const {
   output = File{};
   if (const char* error = layout()) return error;

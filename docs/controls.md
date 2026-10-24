@@ -54,6 +54,8 @@ is unavailable, use the displayed IP or reserve a DHCP address.
 | `GET /api/usb` | Read USB configuration, suspend and wake-permission status. |
 | `GET /api/power` | Read CPU, display and radio power-saving status. |
 | `POST /api/wake` | Request [PC wake from sleep](usb-wake.md). |
+| `POST /api/update` | Download and install the [latest signed firmware](firmware.md#wi-fi-updates) for this board. |
+| `GET /api/update` | Read update `state`, `percent` and `error`; does not start an update. |
 | `POST /api/mode`, `mode=flash` | Enter [download mode](firmware.md#enter-download-mode-remotely) when enabled in the build. |
 
 For scripts, use the same password as a bearer token:
@@ -121,6 +123,7 @@ In [BLESPloit's GATT browser](https://blesplo.it/docs/mobile/connections/):
 | `linux` | `6c 69 6e 75 78` |
 | `windows` | `77 69 6e 64 6f 77 73` |
 | `wake` | `77 61 6b 65` |
+| `update` | `75 70 64 61 74 65` |
 | `flash` (development feature) | `66 6c 61 73 68` |
 
 | Characteristic | UUID | Access |
@@ -135,6 +138,11 @@ Read the state characteristic after processing or subscribe to its notifications
 to confirm the saved result. Physical buttons and Wi-Fi changes update it too.
 The `wake` command requests USB wake without changing the saved mode; its outcome
 appears on the display, and USB permission can be inspected with GET `/api/usb`.
+The `update` command downloads the latest signed production firmware over an
+already-connected Wi-Fi network; see [Wi-Fi updates](firmware.md#wi-fi-updates).
+It wakes the display without changing the saved boot selection. BLE itself does
+not carry the firmware. Its write response acknowledges the queued command;
+progress and errors appear on the display and through `GET /api/update`.
 When [enabled in the build](development.md#development-feature-flags), `flash`
 enters ROM download mode after acknowledging the write; it disconnects BLE and
 USB storage without changing the saved mode.

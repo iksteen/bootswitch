@@ -19,6 +19,10 @@ test:
 	  -Iinclude src/boot_disk.cpp src/virtual_disk.cpp tests/sparse_disk_test.cpp -o build/sparse_disk_test
 	./build/sparse_disk_test
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -Iinclude src/boot_disk.cpp src/virtual_disk.cpp src/firmware_download.cpp \
+	  tests/firmware_download_test.cpp -o build/firmware_download_test
+	./build/firmware_download_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -DBOOTSWITCH_ENABLE_USB_UPDATE=1 \
 	  -DBOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE=1 \
 	  $(MBEDTLS_CFLAGS) -Ibuild/signing-tests -Itests/firmware_update_stubs -Iinclude \
@@ -57,6 +61,10 @@ test:
 	  -DBOOTSWITCH_ENABLE_REMOTE_FLASH=1 \
 	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_dev_test
 	./build/ble_command_dev_test
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+	  -DBOOTSWITCH_ENABLE_USB_UPDATE=0 \
+	  -Iinclude src/ble_command.cpp tests/ble_command_test.cpp -o build/ble_command_no_update_test
+	./build/ble_command_no_update_test
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined \
 	  -Itests/ble_power_stubs -Iinclude src/ble_power.cpp tests/ble_power_test.cpp \
 	  -o build/ble_power_test

@@ -34,7 +34,9 @@ for environment, development in ((board + suffix, bool(suffix)) for board in boa
     assert (b"Entering flash mode\0" in image) == development
     assert b"UPDATE  BIN" in image
     assert b"FIRMWAREBIN" not in image
-    assert (b"Firmware signature required\0" in image) != development
+    # Network downloads require signatures in development builds as well.
+    assert b"Firmware signature required\0" in image
+    assert b"https://github.com/iksteen/bootswitch/releases/latest/download/update-" + environment.removesuffix("-dev").encode() + b".bin\0" in image
     assert public_der() in image
     print(f"{environment}: USB updater present; unsigned images {'allowed' if development else 'rejected'}.")
 

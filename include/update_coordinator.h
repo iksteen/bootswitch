@@ -26,7 +26,9 @@ class UpdateBackend {
     return disk.format(text, length);
   }
 #if BOOTSWITCH_ENABLE_USB_UPDATE
-  virtual const char* stage(VirtualDisk::File file, const esp_partition_t*& staged) = 0;
+  virtual const char* downloadFirmware(VirtualDisk&) { return "Network updates unavailable"; }
+  virtual const char* stage(VirtualDisk::File file, const esp_partition_t*& staged,
+                            bool requireSignature = false) = 0;
   virtual bool activate(const esp_partition_t* staged) = 0;
 #endif
 };
@@ -42,16 +44,23 @@ class UpdateCoordinator {
   UpdateCoordinator(VirtualDisk& disk, UpdateBackend& backend, char* text, size_t capacity)
       : disk_(disk), backend_(backend), text_(text), capacity_(capacity) {}
   bool writable() const { return state_.load() == State::Writable; }
-  bool applyPending() const { return state_.load() == State::Pending; }
+  bool applyPending() const {
+    const auto state = state_.load();
+    return state == State::Pending || state == State::DownloadPending;
+  }
+  int32_t read(uint32_t lba, uint32_t offset, void* bytes, uint32_t length, Mode mode);
   int32_t write(uint32_t lba, uint32_t offset, const void* bytes, uint32_t length);
   // USB callback/button: freeze writes and finish hiding the medium before
   // publishing work to the main loop. Duplicate requests are coalesced.
   bool requestApply();
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  bool requestDownload();
+#endif
   // Main loop only. Returns false when no completed request is pending.
   bool processApply(ApplyResult& result);
 
  private:
-  enum class State { Writable, Ejecting, Pending, Applying, Recovering, Restarting, Unavailable };
+  enum class State { Writable, Ejecting, Pending, DownloadPending, Applying, Recovering, Restarting, Unavailable };
   bool recover();
   VirtualDisk& disk_;
   UpdateBackend& backend_;

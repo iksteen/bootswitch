@@ -7,6 +7,8 @@ on StickS3.
 
 BootSwitch can also wake a sleeping PC through USB when the host permits it.
 Changing the selected OS does not restart the PC or switch a running OS.
+Firmware can be [updated over Wi-Fi on request](docs/firmware.md#wi-fi-updates)
+using signed GitHub release downloads.
 
 Inspired by Stephen Holdaway's [Hardware boot selection switch](https://hackaday.io/project/179539-hardware-boot-selection-switch).
 

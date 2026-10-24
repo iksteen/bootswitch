@@ -26,6 +26,7 @@
 #include "display_telemetry.h"
 #include "screen.h"
 #include "firmware_update.h"
+#include "firmware_download.h"
 #include "update_coordinator.h"
 
 #if ARDUINO_USB_MODE != 0 || ARDUINO_USB_CDC_ON_BOOT != 0
@@ -90,7 +91,15 @@ bootswitch::ScreenRenderer screen;
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 int lastFirmwarePercent = -1;
 uint32_t lastFirmwareDraw = 0;
+bool networkUpdateInProgress = false;
+int networkUpdatePercent = -1;
+const char* networkUpdateState = "idle";
+const char* networkUpdateError = nullptr;
 void firmwareProgress(size_t written, size_t total);
+void updateYield() {
+  if (networkUpdateInProgress && apiEnabled) server.handleClient();
+  delay(1);
+}
 #endif
 void drawScreen();
 bootswitch::ScreenState screenState();
@@ -202,11 +211,22 @@ class DeviceUpdateBackend : public bootswitch::UpdateBackend {
   }
   void endRecovery() override { if (usbReady) tud_connect(); }
 #if BOOTSWITCH_ENABLE_USB_UPDATE
-  const char* stage(VirtualDisk::File file, const esp_partition_t*& staged) override {
+  const char* downloadFirmware(VirtualDisk& volume) override {
+    networkUpdateState = "downloading";
+    problem = "Downloading firmware";
+    drawScreen();
+    return bootswitch::downloadLatestFirmware(volume, firmwareProgress, updateYield);
+  }
+  const char* stage(VirtualDisk::File file, const esp_partition_t*& staged,
+                    bool requireSignature = false) override {
     lastFirmwarePercent = -1;
+    if (networkUpdateInProgress) {
+      networkUpdateState = "validating";
+      networkUpdatePercent = -1;
+    }
     problem = "Validating firmware";
     drawScreen();
-    return bootswitch::stageFirmware(file, staged, firmwareProgress, [] { delay(1); });
+    return bootswitch::stageFirmware(file, staged, firmwareProgress, updateYield, requireSignature);
   }
   bool activate(const esp_partition_t* staged) override {
     return esp_ota_set_boot_partition(staged) == ESP_OK;
@@ -218,9 +238,8 @@ bootswitch::UpdateCoordinator updates(virtualDisk, updateBackend, configText, si
 
 int32_t readDisk(uint32_t lba, uint32_t offset, void* buffer, uint32_t size) {
   if (!ramDiskReady) return BootDisk::read(lba, offset, buffer, size, selected.load());
-  xSemaphoreTake(diskMutex, portMAX_DELAY);
-  const int32_t result = virtualDisk.read(lba, offset, buffer, size, selected.load());
-  xSemaphoreGive(diskMutex);
+  const int32_t result = updates.read(lba, offset, buffer, size, selected.load());
+  if (result < 0) tud_msc_set_sense(0, SCSI_SENSE_NOT_READY, 0x3A, 0);
   return result;
 }
 
@@ -239,7 +258,10 @@ bool startStopDisk(uint8_t, bool start, bool loadEject) {
 
 #if BOOTSWITCH_ENABLE_USB_UPDATE
 void firmwareProgress(size_t written, size_t total) {
+  if (networkUpdateInProgress && std::strcmp(networkUpdateState, "validating") == 0)
+    networkUpdateState = "installing";
   const unsigned percent = written * 100u / total;
+  if (networkUpdateInProgress) networkUpdatePercent = percent;
   const uint32_t now = millis();
   // Keep intermediate updates at 10 Hz; always show the first and final value.
   if (int(percent) != lastFirmwarePercent &&
@@ -248,7 +270,30 @@ void firmwareProgress(size_t written, size_t total) {
     screen.drawStatus(screenState());
     lastFirmwareDraw = now;
   }
-  delay(1);  // Yield while USB and the idle watchdog remain active.
+  updateYield();  // Keep status polling, USB and the idle watchdog responsive.
+}
+
+const char* requestNetworkUpdate() {
+  if (restartPending != RestartAction::None || !updates.writable()) return "Device busy";
+  if (WiFi.status() != WL_CONNECTED) return "Wi-Fi not connected";
+  if (!ramDiskReady) return "Download disk unavailable";
+  if (!updates.requestDownload()) return "Device busy";
+  networkUpdateInProgress = true;
+  networkUpdateState = "queued";
+  networkUpdateError = nullptr;
+  networkUpdatePercent = -1;
+  lastFirmwarePercent = -1;
+  wakeDisplay();
+  problem = "Update requested";
+  redraw = true;
+  return nullptr;
+}
+
+void sendUpdateState(int code = 200) {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(code, "application/json", String("{\"state\":\"") + networkUpdateState +
+      "\",\"percent\":" + (networkUpdatePercent < 0 ? String("null") : String(networkUpdatePercent)) +
+      ",\"error\":" + (networkUpdateError ? String("\"") + networkUpdateError + "\"" : "null") + "}");
 }
 #endif
 
@@ -257,7 +302,14 @@ void applyConfiguration() {
   wakeDisplay();
   bootswitch::ApplyResult result;
   if (!updates.processApply(result)) return;
+  wakeDisplay(); // Give the completion/error message a full display timeout.
 #if BOOTSWITCH_ENABLE_USB_UPDATE
+  if (networkUpdateInProgress) {
+    networkUpdateState = result.restart ? "restarting" : "error";
+    networkUpdateError = result.error;
+    networkUpdatePercent = result.restart ? 100 : -1;
+    networkUpdateInProgress = false;
+  }
   lastFirmwarePercent = -1;
 #endif
   problem = result.error ? result.error :
@@ -338,6 +390,10 @@ bool authorizeChange() {
   }
   if (restartPending != RestartAction::None) {
     server.send(409, "text/plain", "Device restarting");
+    return false;
+  }
+  if (!updates.writable()) {
+    server.send(409, "application/json", "{\"error\":\"Device busy\"}");
     return false;
   }
   return true;
@@ -423,6 +479,17 @@ void startNetwork() {
     if (authorizeChange()) changeMode(selected.load() == Mode::Linux ?
                                     Mode::Windows : Mode::Linux);
   });
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  server.on("/api/update", HTTP_GET, [] {
+    if (authenticate()) sendUpdateState();
+  });
+  server.on("/api/update", HTTP_POST, [] {
+    if (!authorizeChange()) return;
+    if (const char* error = requestNetworkUpdate()) {
+      server.send(503, "application/json", String("{\"error\":\"") + error + "\"}");
+    } else sendUpdateState(202);
+  });
+#endif
   server.on("/api/usb", HTTP_GET, [] {
     if (!authenticate()) return;
     const auto status = bootswitch::usbWakeStatus();
@@ -622,6 +689,14 @@ void loop() {
     else setMode(selected.load() == Mode::Linux ? Mode::Windows : Mode::Linux);
   }
   const BleCommand command = bootswitch::nextBleCommand();
+#if BOOTSWITCH_ENABLE_USB_UPDATE
+  if (command == BleCommand::Update) {
+    if (const char* error = requestNetworkUpdate()) {
+      wakeDisplay(); problem = error; redraw = true;
+    }
+  }
+  else
+#endif
 #if BOOTSWITCH_ENABLE_REMOTE_FLASH
   if (command == BleCommand::Flash) {
     if (!requestFlash()) { problem = "Flash control unavailable"; redraw = true; }

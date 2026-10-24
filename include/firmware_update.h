@@ -10,8 +10,9 @@ namespace bootswitch {
 // Authenticate, then stage and validate the image in the inactive slot.
 // Release builds require the embedded key's signature before any flash write.
 // The disk must remain unchanged. Progress is called after every write chunk.
+// Network callers require signatures even when unsigned USB updates are enabled.
 const char* stageFirmware(VirtualDisk::File file, const esp_partition_t*& staged,
                           void (*progress)(size_t, size_t) = nullptr,
-                          void (*yield)() = nullptr);
+                          void (*yield)() = nullptr, bool requireSignature = false);
 }  // namespace bootswitch
 #endif

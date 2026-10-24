@@ -72,6 +72,10 @@ class Backend : public UpdateBackend {
   Checkpoint* hideMedia = nullptr;
   Checkpoint* formatting = nullptr;
   Checkpoint* publishMedia = nullptr;
+  Checkpoint* downloading = nullptr;
+  std::vector<uint8_t> download;
+  const char* downloadError = nullptr;
+  unsigned downloads = 0;
   void lockDisk() override {
     if (lockAttempt) lockAttempt->signal();
     diskMutex.lock();
@@ -108,10 +112,20 @@ class Backend : public UpdateBackend {
     if (formatting) formatting->pause();
     return ota.fault != Fault::Rebuild && disk.format(text, length);
   }
-  const char* stage(VirtualDisk::File file, const esp_partition_t*& staged) override {
+  const char* downloadFirmware(VirtualDisk& disk) override {
+    ++downloads;
+    assert(!media.load());
+    if (downloading) downloading->pause();
+    if (download.empty()) return nullptr;
+    assert(disk.prepareFirmware(download.size()));
+    assert(disk.writeFirmware(0, download.data(), downloadError ? download.size() / 2 : download.size()));
+    return downloadError;
+  }
+  const char* stage(VirtualDisk::File file, const esp_partition_t*& staged,
+                    bool requireSignature = false) override {
     ++stageCalls;
     assert(!media.load());
-    return stageFirmware(file, staged);
+    return stageFirmware(file, staged, nullptr, nullptr, requireSignature);
   }
   bool activate(const esp_partition_t* staged) override {
     assert(saveCalls == 1 && ota.verified);
@@ -357,6 +371,82 @@ void unsignedPolicy(const std::vector<uint8_t>& image) {
     f.assertFreshDisk();
   }
 }
+
+void networkUpdates(const std::vector<uint8_t>& image, const std::vector<uint8_t>& raw) {
+  {
+    Fixture f(image); f.backend.download = image;
+    Checkpoint admitted, attempted;
+    f.backend.admittedWrite = &admitted;
+    int32_t written = -1;
+    std::thread writer([&] { written = f.updates.write(100, 0, "old", 3); });
+    admitted.wait();
+    assert(f.updates.requestDownload());
+    f.backend.lockAttempt = &attempted;
+    std::thread processor([&] { assert(f.updates.processApply(f.result)); });
+    attempted.wait();
+    assert(!f.backend.downloads); // The preexisting host write must finish first.
+    admitted.release(); writer.join(); processor.join();
+    assert(written == 3 && f.result.restart && !f.result.error);
+    assert(!std::strcmp(f.backend.saved.hostname, "original"));
+  }
+  {
+    Fixture f(image); f.backend.download = image;
+    Checkpoint attempted;
+    f.backend.lockAttempt = &attempted;
+    f.backend.diskMutex.lock();
+    uint8_t sector[512] = {};
+    int32_t read = 0;
+    std::thread reader([&] { read = f.updates.read(0, 0, sector, sizeof(sector), Mode::Linux); });
+    attempted.wait();
+    assert(f.updates.requestDownload());
+    f.backend.diskMutex.unlock(); reader.join();
+    assert(read == -1); // A queued read cannot observe recycled download memory.
+    assert(f.updates.processApply(f.result) && f.result.restart && !f.result.error);
+  }
+  {
+    Fixture f(image); f.backend.download = image;
+    Checkpoint downloading;
+    f.backend.downloading = &downloading;
+    assert(f.updates.requestDownload() && !f.updates.requestDownload());
+    std::thread processor([&] { assert(f.updates.processApply(f.result)); });
+    downloading.wait();
+    uint8_t sector[512];
+    assert(f.updates.read(0, 0, sector, sizeof(sector), Mode::Linux) == -1);
+    assert(f.updates.write(0, 0, "bad", 3) == -1 && !f.updates.requestApply());
+    downloading.release(); processor.join();
+    assert(f.result.restart && !f.result.error && f.result.firmware);
+    assert(f.backend.ota.selected == &f.backend.ota.target && f.backend.downloads == 1);
+    assert(!std::strcmp(f.backend.saved.hostname, "original"));
+    assert(f.backend.ota.image == std::vector<uint8_t>(image.begin(), image.end() - 80));
+  }
+  // Even development builds require a signature for network downloads.
+  for (const bool interrupted : {false, true}) {
+    Fixture f(image); f.backend.download = raw;
+    f.backend.downloadError = interrupted ? "Firmware download failed" : nullptr;
+    assert(f.updates.requestDownload() && f.updates.processApply(f.result));
+    assert(f.result.error && !std::strcmp(f.result.error,
+        interrupted ? "Firmware download failed" : "Firmware signature required"));
+    assert(!f.backend.ota.begins && !f.backend.saveCalls && !f.backend.ota.activations);
+    f.assertFreshDisk();
+    f.backend.download = image; f.backend.downloadError = nullptr;
+    assert(f.updates.requestDownload() && f.updates.processApply(f.result));
+    assert(f.result.restart && !f.result.error && f.result.firmware);
+  }
+  {
+    Fixture f(image); f.backend.download = image; f.backend.ota.fault = Fault::Activate;
+    assert(f.updates.requestDownload() && f.updates.processApply(f.result));
+    assert(f.result.error && !std::strcmp(f.result.error, "Firmware activation failed"));
+    f.assertFreshDisk();
+    assert(!std::strcmp(f.backend.saved.hostname, "original"));
+  }
+  {
+    Fixture f(image); // A transport returning success without a file cannot restart.
+    assert(f.updates.requestDownload() && f.updates.processApply(f.result));
+    assert(f.result.error && !std::strcmp(f.result.error, "Downloaded firmware missing"));
+    assert(!f.backend.stageCalls && !f.backend.ota.begins);
+    f.assertFreshDisk();
+  }
+}
 }  // namespace
 
 const esp_partition_t* esp_ota_get_running_partition() { return &flash->running; }
@@ -407,5 +497,6 @@ int main(int argc, char** argv) {
   settingsOnly(image);
   invalidSettingsNeverStage(image);
   unsignedPolicy(load(std::string(argv[1]) + "/raw.bin"));
+  networkUpdates(image, load(std::string(argv[1]) + "/raw.bin"));
   std::cout << "Update coordinator: forced write/eject/recovery races, real signatures, activation/NVS failures and retries passed.\n";
 }

@@ -72,6 +72,48 @@ mode ([M5Stack upload instructions](https://docs.m5stack.com/en/arduino/m5sticks
 The serial upload port disappears during normal use. The side reset/power button
 is separate from the front A boot-selection button.
 
+## Wi-Fi updates
+
+With Wi-Fi connected, request the latest production release through authenticated
+`POST /api/update`, or send the paired BLE command `update`:
+
+```sh
+curl -X POST -H "Authorization: Bearer $BOOTSWITCH_TOKEN" \
+  -H 'X-Bootswitch: 1' http://bootswitch.local/api/update
+curl -H "Authorization: Bearer $BOOTSWITCH_TOKEN" http://bootswitch.local/api/update
+```
+
+The POST returns `202` after queuing the update. GET reports `state` (`idle`,
+`queued`, `downloading`, `validating`, `installing`, `restarting` or `error`),
+`percent` (or `null`) and `error` (or `null`). The display wakes and shows progress.
+HTTP control requests during an update are rejected with `409`; status reads remain
+available between network/flash operations. A successful update restarts the
+device. BLE can request an update even when the HTTP API is disabled.
+
+BootSwitch uses GitHub's [latest release download link](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)
+for `iksteen/bootswitch`, selecting `update-sticks3.bin` or `update-tqt.bin`.
+Downloads use verified HTTPS, including redirects; clock synchronization is
+requested when necessary for certificate validation. Outbound HTTPS and access
+to `time.cloudflare.com` or `pool.ntp.org` for initial time synchronization must
+be available. There is no periodic update check or automatic installation.
+
+Both production and development firmware require the BootSwitch signature for
+network downloads and check board compatibility before writing flash. This path
+always installs production firmware, including when requested from a development
+build. A request downloads the latest release even if it is already installed;
+there is no version comparison or anti-rollback counter.
+
+The download reuses the USB disk's RAM. USB disk access is unavailable during
+the update; saved settings and boot selection are retained, while unapplied disk
+edits are discarded. A missing release asset, interrupted download, invalid
+signature or activation failure rebuilds the disk from saved settings and
+reconnects USB. The error remains on screen and in `GET /api/update`; the command
+can be retried without a reset. No partial download is activated.
+
+Network updates are available when `BOOTSWITCH_ENABLE_USB_UPDATE=1`, sharing the
+same storage and updater as USB updates. When disabled, the HTTP update routes
+are absent and BLE `update` is ignored.
+
 ## USB-disk updates
 
 Production and development builds enable USB updates. Use an image for the

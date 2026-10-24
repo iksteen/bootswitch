@@ -53,10 +53,10 @@ bool verifySignature(const uint8_t digest[32], const uint8_t signature[64]) {
 }
 
 const char* authenticateFirmware(VirtualDisk::File file, size_t& imageSize,
-                                 uint8_t* buffer, void (*yield)()) {
+                                 uint8_t* buffer, void (*yield)(), bool requireSignature) {
   imageSize = file.size();
   if (file.size() <= kTrailerSize)
-    return BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE ? nullptr : "Firmware signature required";
+    return BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE && !requireSignature ? nullptr : "Firmware signature required";
   const size_t candidateSize = file.size() - kTrailerSize;
   mbedtls_sha256_context hash;
   mbedtls_sha256_init(&hash);
@@ -76,7 +76,7 @@ const char* authenticateFirmware(VirtualDisk::File file, size_t& imageSize,
   }
   if (std::memcmp(trailer, kSignatureMagic, sizeof(kSignatureMagic)) != 0) {
     mbedtls_sha256_free(&hash);
-    return BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE ? nullptr : "Firmware signature required";
+    return BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE && !requireSignature ? nullptr : "Firmware signature required";
   }
   if (read32(trailer + 8) != candidateSize || read32(trailer + 12) != kFirmwareTargetId) {
     mbedtls_sha256_free(&hash);
@@ -93,7 +93,7 @@ const char* authenticateFirmware(VirtualDisk::File file, size_t& imageSize,
 }  // namespace
 
 const char* stageFirmware(VirtualDisk::File file, const esp_partition_t*& staged,
-                          void (*progress)(size_t, size_t), void (*yield)()) {
+                          void (*progress)(size_t, size_t), void (*yield)(), bool requireSignature) {
   staged = nullptr;
   if (!file) return nullptr;
   const auto* running = esp_ota_get_running_partition();
@@ -104,7 +104,7 @@ const char* stageFirmware(VirtualDisk::File file, const esp_partition_t*& staged
   std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[4096]);
   if (!buffer) return "Firmware buffer unavailable";
   size_t imageSize = 0;
-  if (const char* error = authenticateFirmware(file, imageSize, buffer.get(), yield)) return error;
+  if (const char* error = authenticateFirmware(file, imageSize, buffer.get(), yield, requireSignature)) return error;
   if (imageSize > target->size) return "Firmware too large";
   constexpr size_t descriptorOffset = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
   auto probe = file;

@@ -66,7 +66,7 @@ These compile-time options are independent and cannot be changed through CONFIG.
 | Build flag | Default | Effect when `1` |
 | --- | --- | --- |
 | `BOOTSWITCH_ENABLE_REMOTE_FLASH` | `0` | API `mode=flash` and BLE `flash` |
-| `BOOTSWITCH_ENABLE_USB_UPDATE` | `1` | Installing UPDATE.BIN on eject/apply |
+| `BOOTSWITCH_ENABLE_USB_UPDATE` | `1` | Installing UPDATE.BIN on eject/apply and signed GitHub updates on request |
 | `BOOTSWITCH_ALLOW_UNSIGNED_FIRMWARE` | `0` | Accept raw unsigned USB updates as well as valid signed updates |
 | `BOOTSWITCH_DISABLE_BATTERY_CHARGING` | `0` | Disable battery charging for power measurements |
 
@@ -92,8 +92,9 @@ report the confirmed startup state.
 
 With remote flash disabled, authenticated API `mode=flash` is rejected with HTTP
 400 and BLE `flash` is ignored. With USB updates disabled, UPDATE.BIN is an
-ordinary RAM-disk file: it is ignored on eject and discarded at restart. Normal
-CONFIG.INI saves still work. The physical reset/power button provides download
+ordinary RAM-disk file: it is ignored on eject and discarded at restart.
+Network-update API routes are absent and BLE `update` is ignored in that build.
+Normal CONFIG.INI saves still work. The physical reset/power button provides download
 mode in either build.
 
 ## CI and releases
